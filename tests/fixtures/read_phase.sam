@@ -1,0 +1,7 @@
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:12
+@RG	ID:S1	SM:S1
+read_h1_1	0	chr1	1	60	6M	*	0	0	GTGTAC	IIIIII	RG:Z:S1
+read_h1_2	0	chr1	1	60	6M	*	0	0	GTGTAC	IIIIII	RG:Z:S1
+read_h2_1	0	chr1	1	60	6M	*	0	0	ACGCGC	IIIIII	RG:Z:S1
+read_h2_2	0	chr1	1	60	6M	*	0	0	ACGCGC	IIIIII	RG:Z:S1

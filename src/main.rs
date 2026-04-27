@@ -1,8 +1,11 @@
 use libc::c_void;
+use rust_htslib::bam::record::Cigar;
+use rust_htslib::bam::{self, Read as BamRead};
 use rust_htslib::bcf::record::GenotypeAllele;
-use rust_htslib::bcf::{self, Read};
+use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::htslib;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -33,6 +36,9 @@ struct Config {
     fasta_path: String,
     output_path: Option<String>,
     sample_name: Option<String>,
+    phase_bam_path: Option<String>,
+    phase_min_mapq: u8,
+    phase_min_baseq: u8,
     max_gap: i64,
     min_variants: usize,
     unsupported_alleles: UnsupportedAllelesPolicy,
@@ -83,6 +89,12 @@ struct Stats {
     observations: u64,
     multiallelic_records: u64,
     observations_with_n: u64,
+    bam_phase_candidates: u64,
+    bam_phase_informative_reads: u64,
+    bam_phase_components: u64,
+    bam_phase_phased_variants: u64,
+    bam_phase_unphased_variants: u64,
+    bam_phase_conflicts: u64,
     skipped_no_gt: u64,
     skipped_not_diploid: u64,
     skipped_missing_gt: u64,
@@ -96,6 +108,77 @@ struct Stats {
     skipped_alt_same_as_ref: u64,
     skipped_ref_allele: u64,
     emitted: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PhaseCandidate {
+    rid: i32,
+    chrom: String,
+    pos: i64,
+    end: i64,
+    alleles: Vec<String>,
+    gt_alleles: [i32; 2],
+    input_order_alleles: [i32; 2],
+    is_snv: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhaseAssignment {
+    ps: i64,
+    rel: u8,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReadEvent {
+    base: Option<u8>,
+    qual: Option<u8>,
+    insertion_after: Vec<(u8, u8)>,
+}
+
+#[derive(Debug, Clone)]
+struct Dsu {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+    xor_to_parent: Vec<u8>,
+}
+
+impl Dsu {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+            xor_to_parent: vec![0; n],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> (usize, u8) {
+        let parent = self.parent[x];
+        if parent == x {
+            return (x, 0);
+        }
+        let (root, px) = self.find(parent);
+        self.parent[x] = root;
+        self.xor_to_parent[x] ^= px;
+        (self.parent[x], self.xor_to_parent[x])
+    }
+
+    fn union(&mut self, a: usize, b: usize, parity: u8) -> bool {
+        let (mut ra, xa) = self.find(a);
+        let (mut rb, xb) = self.find(b);
+        if ra == rb {
+            return (xa ^ xb) == parity;
+        }
+        let x = xa ^ xb ^ parity;
+        if self.rank[ra] < self.rank[rb] {
+            std::mem::swap(&mut ra, &mut rb);
+        }
+        self.parent[rb] = ra;
+        self.xor_to_parent[rb] = x;
+        if self.rank[ra] == self.rank[rb] {
+            self.rank[ra] += 1;
+        }
+        true
+    }
 }
 
 struct Faidx(*mut htslib::faidx_t);
@@ -133,6 +216,11 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "      --unsupported-alleles MODE\n",
             "                        Selected unsupported allele policy: skip or fail\n",
             "                        (default: skip)\n",
+            "      --phase-from-bam FILE\n",
+            "                        Experimental Rust read-backed phasing from indexed BAM/CRAM\n",
+            "                        before MNV construction; input GT phase/PS is ignored\n",
+            "      --phase-min-mapq N  Minimum read MAPQ for --phase-from-bam (default: 20)\n",
+            "      --phase-min-baseq N Minimum base quality for --phase-from-bam (default: 13)\n",
             "      --warn-on-n        Warn when a selected REF/ALT allele contains N\n",
             "      --no-ref-check     Do not fail when VCF REF differs from FASTA\n",
             "      --no-header        Suppress VCF header\n",
@@ -152,6 +240,9 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "  * FORMAT/PS is honored when present; variants are only merged within the\n",
             "    same phase set. If PS is absent, the phase separator and proximity\n",
             "    define the merge block.\n",
+            "  * --phase-from-bam is a Rust-only experimental phaser inspired by\n",
+            "    WhatsHap's read-backed phasing model. It currently phases variants by\n",
+            "    read-supported allele co-occurrence in connected components.\n",
             "  * With the default --max-gap 0, only adjacent phased variants are\n",
             "    merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are\n",
             "    TYPE=COMPLEX.\n",
@@ -185,6 +276,9 @@ fn parse_args() -> Config {
     let mut fasta_path: Option<String> = None;
     let mut output_path: Option<String> = None;
     let mut sample_name: Option<String> = None;
+    let mut phase_bam_path: Option<String> = None;
+    let mut phase_min_mapq = 20u8;
+    let mut phase_min_baseq = 13u8;
     let mut max_gap = 0i64;
     let mut min_variants = 2usize;
     let mut unsupported_alleles = UnsupportedAllelesPolicy::Skip;
@@ -248,6 +342,35 @@ fn parse_args() -> Config {
                 }
                 unsupported_alleles = parse_unsupported_alleles_policy(&args[i]);
             }
+            "--phase-from-bam" | "--bam" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--phase-from-bam requires an argument");
+                }
+                phase_bam_path = Some(args[i].clone());
+            }
+            "--phase-min-mapq" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--phase-min-mapq requires an argument");
+                }
+                let value = parse_i64(&args[i], "--phase-min-mapq");
+                if !(0..=255).contains(&value) {
+                    die("--phase-min-mapq must be between 0 and 255");
+                }
+                phase_min_mapq = value as u8;
+            }
+            "--phase-min-baseq" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--phase-min-baseq requires an argument");
+                }
+                let value = parse_i64(&args[i], "--phase-min-baseq");
+                if !(0..=255).contains(&value) {
+                    die("--phase-min-baseq must be between 0 and 255");
+                }
+                phase_min_baseq = value as u8;
+            }
             "--warn-on-n" | "--warm-on-n" => warn_on_n = true,
             "--no-ref-check" => no_ref_check = true,
             "--no-header" => no_header = true,
@@ -281,6 +404,9 @@ fn parse_args() -> Config {
         fasta_path: fasta_path.unwrap(),
         output_path,
         sample_name,
+        phase_bam_path,
+        phase_min_mapq,
+        phase_min_baseq,
         max_gap,
         min_variants,
         unsupported_alleles,
@@ -411,7 +537,553 @@ fn preflight_vcf_header(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_read_usable_for_phasing(record: &bam::Record, min_mapq: u8) -> bool {
+    !record.is_unmapped()
+        && !record.is_secondary()
+        && !record.is_supplementary()
+        && !record.is_duplicate()
+        && !record.is_quality_check_failed()
+        && record.mapq() >= min_mapq
+}
+
+fn read_events(record: &bam::Record) -> HashMap<i64, ReadEvent> {
+    let mut events: HashMap<i64, ReadEvent> = HashMap::new();
+    let seq = record.seq();
+    let qual = record.qual();
+    let mut ref_pos = record.pos();
+    let mut read_pos = 0usize;
+    let mut last_ref_pos: Option<i64> = None;
+
+    for cigar in record.cigar().iter() {
+        match *cigar {
+            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+                for _ in 0..len {
+                    if read_pos < seq.len() {
+                        let base = upbase(seq[read_pos]);
+                        let q = qual.get(read_pos).copied().unwrap_or(255);
+                        let event = events.entry(ref_pos).or_default();
+                        event.base = Some(base);
+                        event.qual = Some(q);
+                    }
+                    last_ref_pos = Some(ref_pos);
+                    ref_pos += 1;
+                    read_pos += 1;
+                }
+            }
+            Cigar::Ins(len) => {
+                if let Some(anchor) = last_ref_pos {
+                    let event = events.entry(anchor).or_default();
+                    for _ in 0..len {
+                        if read_pos < seq.len() {
+                            let base = upbase(seq[read_pos]);
+                            let q = qual.get(read_pos).copied().unwrap_or(255);
+                            event.insertion_after.push((base, q));
+                        }
+                        read_pos += 1;
+                    }
+                } else {
+                    read_pos += len as usize;
+                }
+            }
+            Cigar::Del(len) | Cigar::RefSkip(len) => {
+                for _ in 0..len {
+                    events.entry(ref_pos).or_default();
+                    last_ref_pos = Some(ref_pos);
+                    ref_pos += 1;
+                }
+            }
+            Cigar::SoftClip(len) => read_pos += len as usize,
+            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+
+    events
+}
+
+fn read_allele_for_candidate(
+    events: &HashMap<i64, ReadEvent>,
+    candidate: &PhaseCandidate,
+    min_baseq: u8,
+) -> Option<String> {
+    let mut allele = Vec::new();
+    let start0 = candidate.pos - 1;
+    let ref_len = candidate.alleles.first()?.len() as i64;
+    for pos0 in start0..start0 + ref_len {
+        let event = events.get(&pos0)?;
+        if let Some(base) = event.base {
+            if event.qual.unwrap_or(0) < min_baseq {
+                return None;
+            }
+            allele.push(base);
+        }
+        for &(base, q) in &event.insertion_after {
+            if q < min_baseq {
+                return None;
+            }
+            allele.push(base);
+        }
+    }
+    if allele.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&allele).into_owned())
+    }
+}
+
+fn collect_read_phase_calls(
+    record: &bam::Record,
+    candidates: &[PhaseCandidate],
+    candidates_by_pos0: &HashMap<i64, Vec<usize>>,
+    min_baseq: u8,
+) -> Vec<(usize, u8)> {
+    let events = read_events(record);
+    if events.is_empty() {
+        return Vec::new();
+    }
+
+    let mut calls = Vec::new();
+    for &pos0 in events.keys() {
+        let Some(indices) = candidates_by_pos0.get(&pos0) else {
+            continue;
+        };
+        for &idx in indices {
+            let candidate = &candidates[idx];
+            let Some(read_allele) = read_allele_for_candidate(&events, candidate, min_baseq) else {
+                continue;
+            };
+            let allele0 = &candidate.alleles[candidate.input_order_alleles[0] as usize];
+            let allele1 = &candidate.alleles[candidate.input_order_alleles[1] as usize];
+            if read_allele.eq_ignore_ascii_case(allele0) {
+                calls.push((idx, 0));
+            } else if read_allele.eq_ignore_ascii_case(allele1) {
+                calls.push((idx, 1));
+            }
+        }
+    }
+
+    calls.sort_by_key(|&(idx, _)| idx);
+    calls.dedup_by_key(|(idx, _)| *idx);
+    calls
+}
+
+fn phase_candidates_from_bam(
+    cfg: &Config,
+    candidates: &[PhaseCandidate],
+    st: &mut Stats,
+) -> Result<HashMap<usize, PhaseAssignment>, String> {
+    let Some(bam_path) = cfg.phase_bam_path.as_deref() else {
+        return Ok(HashMap::new());
+    };
+    if candidates.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut bam = bam::IndexedReader::from_path(bam_path)
+        .map_err(|e| format!("cannot open indexed BAM/CRAM '{bam_path}': {e}"))?;
+
+    let mut by_chrom: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        by_chrom
+            .entry(candidate.chrom.as_str())
+            .or_default()
+            .push(idx);
+    }
+
+    let mut pair_scores: HashMap<(usize, usize), i64> = HashMap::new();
+    let mut record = bam::Record::new();
+
+    for (chrom, indices) in by_chrom {
+        let beg = indices
+            .iter()
+            .map(|&idx| candidates[idx].pos - 1)
+            .min()
+            .unwrap_or(0)
+            .max(0);
+        let end = indices
+            .iter()
+            .map(|&idx| candidates[idx].end)
+            .max()
+            .unwrap_or(beg + 1);
+        bam.fetch((chrom.as_bytes(), beg, end))
+            .map_err(|e| format!("failed to fetch {chrom}:{beg}-{end} from '{bam_path}': {e}"))?;
+
+        let mut candidates_by_pos0: HashMap<i64, Vec<usize>> = HashMap::new();
+        for &idx in &indices {
+            candidates_by_pos0
+                .entry(candidates[idx].pos - 1)
+                .or_default()
+                .push(idx);
+        }
+
+        while let Some(result) = bam.read(&mut record) {
+            result.map_err(|e| format!("failed to read BAM/CRAM record from '{bam_path}': {e}"))?;
+            if !is_read_usable_for_phasing(&record, cfg.phase_min_mapq) {
+                continue;
+            }
+            let calls = collect_read_phase_calls(
+                &record,
+                candidates,
+                &candidates_by_pos0,
+                cfg.phase_min_baseq,
+            );
+            if calls.len() < 2 {
+                continue;
+            }
+            st.bam_phase_informative_reads += 1;
+            for i in 0..calls.len() {
+                for j in i + 1..calls.len() {
+                    let (a, sa) = calls[i];
+                    let (b, sb) = calls[j];
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    let parity = (sa ^ sb) & 1;
+                    let score = pair_scores.entry(key).or_insert(0);
+                    if parity == 0 {
+                        *score += 1;
+                    } else {
+                        *score -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut constraints: Vec<(i64, usize, usize, u8)> = pair_scores
+        .into_iter()
+        .filter_map(|((a, b), score)| {
+            if score > 0 {
+                Some((score, a, b, 0))
+            } else if score < 0 {
+                Some((-score, a, b, 1))
+            } else {
+                None
+            }
+        })
+        .collect();
+    constraints.sort_by(|x, y| {
+        y.0.cmp(&x.0)
+            .then_with(|| x.1.cmp(&y.1))
+            .then_with(|| x.2.cmp(&y.2))
+    });
+
+    let mut dsu = Dsu::new(candidates.len());
+    for (_weight, a, b, parity) in constraints {
+        if !dsu.union(a, b, parity) {
+            st.bam_phase_conflicts += 1;
+        }
+    }
+
+    let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
+    for idx in 0..candidates.len() {
+        let (root, _) = dsu.find(idx);
+        components.entry(root).or_default().push(idx);
+    }
+
+    let mut assignments = HashMap::new();
+    for members in components.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        st.bam_phase_components += 1;
+        let anchor = *members
+            .iter()
+            .min_by_key(|&&idx| (candidates[idx].pos, idx))
+            .expect("non-empty component");
+        let ps = candidates[anchor].pos;
+        let (_, anchor_xor) = dsu.find(anchor);
+        for &idx in members {
+            let (_, x) = dsu.find(idx);
+            assignments.insert(
+                idx,
+                PhaseAssignment {
+                    ps,
+                    rel: (x ^ anchor_xor) & 1,
+                },
+            );
+        }
+    }
+
+    st.bam_phase_phased_variants = assignments.len() as u64;
+    st.bam_phase_unphased_variants = candidates.len().saturating_sub(assignments.len()) as u64;
+    st.skipped_unphased += st.bam_phase_unphased_variants;
+    Ok(assignments)
+}
+
+fn add_observation_for_candidate(
+    cfg: &Config,
+    candidate: &PhaseCandidate,
+    hap: usize,
+    allele: i32,
+    ps: i64,
+    obs: &mut Vec<Obs>,
+    st: &mut Stats,
+) -> Result<(), String> {
+    if allele == 0 {
+        st.skipped_ref_allele += 1;
+        return Ok(());
+    }
+    if allele < 0 || allele as usize >= candidate.alleles.len() {
+        st.skipped_unsupported_alt += 1;
+        st.skipped_alt_out_of_range += 1;
+        if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+            return Err(format!(
+                "unsupported selected ALT allele index at {}:{} hap={} allele={allele}",
+                candidate.chrom,
+                candidate.pos,
+                hap + 1
+            ));
+        }
+        return Ok(());
+    }
+
+    let ref_allele = &candidate.alleles[0];
+    let alt_allele = &candidate.alleles[allele as usize];
+    if !is_plain_dna_allele(alt_allele.as_bytes()) {
+        st.skipped_unsupported_alt += 1;
+        let kind = unsupported_alt_kind(alt_allele.as_bytes());
+        match kind {
+            "symbolic_or_breakend" => st.skipped_alt_symbolic_or_breakend += 1,
+            "spanning_deletion" => st.skipped_alt_spanning_deletion += 1,
+            _ => st.skipped_alt_non_dna += 1,
+        }
+        if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+            return Err(format!(
+                "unsupported selected ALT allele at {}:{} hap={} ALT={} kind={kind}",
+                candidate.chrom,
+                candidate.pos,
+                hap + 1,
+                alt_allele
+            ));
+        }
+        return Ok(());
+    }
+    if ref_allele.eq_ignore_ascii_case(alt_allele) {
+        st.skipped_unsupported_alt += 1;
+        st.skipped_alt_same_as_ref += 1;
+        if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+            return Err(format!(
+                "unsupported selected ALT allele at {}:{} hap={} ALT equals REF ({alt_allele})",
+                candidate.chrom,
+                candidate.pos,
+                hap + 1
+            ));
+        }
+        return Ok(());
+    }
+
+    if contains_n_base(ref_allele.as_bytes()) || contains_n_base(alt_allele.as_bytes()) {
+        st.observations_with_n += 1;
+        if cfg.warn_on_n {
+            eprintln!(
+                "warning: N base in selected allele at {}:{} hap={} REF={} ALT={}",
+                candidate.chrom,
+                candidate.pos,
+                hap + 1,
+                ref_allele,
+                alt_allele
+            );
+        }
+    }
+
+    obs.push(Obs {
+        rid: candidate.rid,
+        hap: hap as i32,
+        ps,
+        pos: candidate.pos,
+        end: candidate.end,
+        ref_allele: ref_allele.clone(),
+        alt_allele: alt_allele.clone(),
+        is_snv: candidate.is_snv && is_snv_pair(ref_allele, alt_allele),
+    });
+    st.observations += 1;
+    Ok(())
+}
+
+fn read_observations_with_bam_phasing(
+    cfg: &Config,
+) -> Result<(HeaderInfo, Vec<Obs>, Stats), String> {
+    preflight_vcf_header(&cfg.input_path)?;
+    let mut reader = bcf::Reader::from_path(&cfg.input_path)
+        .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    let sample_count = reader.header().sample_count();
+    if sample_count == 0 {
+        return Err("input has no samples; phased GT is required".to_string());
+    }
+    let sample_idx = match cfg.sample_name.as_deref() {
+        None => 0usize,
+        Some(name) => reader.header().sample_id(name.as_bytes()).ok_or_else(|| {
+            let available = reader
+                .header()
+                .samples()
+                .iter()
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("sample '{name}' not found. Available samples: {available}")
+        })?,
+    };
+    let header_info = collect_header_info(&reader, sample_idx)?;
+
+    let mut candidates = Vec::new();
+    let mut st = Stats::default();
+    let mut record = reader.empty_record();
+
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+        st.records += 1;
+        if record.alleles().len() > 2 {
+            st.multiallelic_records += 1;
+        }
+
+        let genotypes = match record.genotypes() {
+            Ok(g) => g,
+            Err(_) => {
+                st.skipped_no_gt += 1;
+                continue;
+            }
+        };
+        let gt = genotypes.get(sample_idx);
+        if gt.len() != 2 {
+            st.skipped_not_diploid += 1;
+            continue;
+        }
+        let Some(a0) = allele_index(gt[0]) else {
+            st.skipped_missing_gt += 1;
+            continue;
+        };
+        let Some(a1) = allele_index(gt[1]) else {
+            st.skipped_missing_gt += 1;
+            continue;
+        };
+
+        let alleles_raw = record.alleles();
+        if alleles_raw.is_empty() {
+            st.skipped_ref += 1;
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                return Err("unsupported empty REF allele".to_string());
+            }
+            continue;
+        }
+
+        let pos1 = record.pos() + 1;
+        let rid = record.rid().unwrap_or(0) as usize;
+        let chrom = header_info
+            .rid_names
+            .get(rid)
+            .map(String::as_str)
+            .unwrap_or(".");
+        if !is_plain_dna_allele(alleles_raw[0]) {
+            st.skipped_ref += 1;
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                let ref_allele = uppercase_ascii_string(alleles_raw[0]);
+                return Err(format!(
+                    "unsupported REF allele at {chrom}:{pos1} REF={ref_allele}"
+                ));
+            }
+            continue;
+        }
+
+        for allele in [a0, a1] {
+            if allele < 0 || allele as usize >= alleles_raw.len() {
+                st.skipped_unsupported_alt += 1;
+                st.skipped_alt_out_of_range += 1;
+                if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                    return Err(format!(
+                        "unsupported selected allele index at {chrom}:{pos1} allele={allele}"
+                    ));
+                }
+                continue;
+            }
+            if allele != 0 && !is_plain_dna_allele(alleles_raw[allele as usize]) {
+                st.skipped_unsupported_alt += 1;
+                let kind = unsupported_alt_kind(alleles_raw[allele as usize]);
+                match kind {
+                    "symbolic_or_breakend" => st.skipped_alt_symbolic_or_breakend += 1,
+                    "spanning_deletion" => st.skipped_alt_spanning_deletion += 1,
+                    _ => st.skipped_alt_non_dna += 1,
+                }
+                if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                    let alt_allele = uppercase_ascii_string(alleles_raw[allele as usize]);
+                    return Err(format!(
+                        "unsupported selected allele at {chrom}:{pos1} ALT={alt_allele} kind={kind}"
+                    ));
+                }
+                continue;
+            }
+        }
+
+        if a0 == a1 {
+            st.skipped_unphased += 1;
+            continue;
+        }
+        if a0 < 0 || a1 < 0 || a0 as usize >= alleles_raw.len() || a1 as usize >= alleles_raw.len()
+        {
+            continue;
+        }
+        if !is_plain_dna_allele(alleles_raw[a0 as usize])
+            || !is_plain_dna_allele(alleles_raw[a1 as usize])
+        {
+            continue;
+        }
+
+        let alleles = alleles_raw
+            .iter()
+            .map(|a| uppercase_ascii_string(a))
+            .collect::<Vec<_>>();
+        let ref_len = alleles[0].len() as i64;
+        let is_snv = alleles[a0 as usize].len() == 1 && alleles[a1 as usize].len() == 1;
+        candidates.push(PhaseCandidate {
+            rid: record.rid().unwrap_or(0) as i32,
+            chrom: chrom.to_string(),
+            pos: pos1,
+            end: pos1 + ref_len - 1,
+            alleles,
+            gt_alleles: [a0, a1],
+            input_order_alleles: [a0, a1],
+            is_snv,
+        });
+    }
+
+    st.bam_phase_candidates = candidates.len() as u64;
+    let assignments = phase_candidates_from_bam(cfg, &candidates, &mut st)?;
+
+    let mut obs = Vec::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let Some(assignment) = assignments.get(&idx).copied() else {
+            continue;
+        };
+        st.phased_records += 1;
+        let hap_alleles = if assignment.rel == 0 {
+            candidate.gt_alleles
+        } else {
+            [candidate.gt_alleles[1], candidate.gt_alleles[0]]
+        };
+        add_observation_for_candidate(
+            cfg,
+            candidate,
+            0,
+            hap_alleles[0],
+            assignment.ps,
+            &mut obs,
+            &mut st,
+        )?;
+        add_observation_for_candidate(
+            cfg,
+            candidate,
+            1,
+            hap_alleles[1],
+            assignment.ps,
+            &mut obs,
+            &mut st,
+        )?;
+    }
+
+    Ok((header_info, obs, st))
+}
+
 fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), String> {
+    if cfg.phase_bam_path.is_some() {
+        return read_observations_with_bam_phasing(cfg);
+    }
     preflight_vcf_header(&cfg.input_path)?;
     let mut reader = bcf::Reader::from_path(&cfg.input_path)
         .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
@@ -880,6 +1552,13 @@ fn write_header<W: Write>(out: &mut W, cfg: &Config, header: &HeaderInfo) -> io:
     )?;
     writeln!(out, "##phase_mnv_normalization_citation=Tan_A_Abecasis_GR_Kang_HM_Bioinformatics_2015_31_13_2202_2204_doi_10.1093/bioinformatics/btv112")?;
     writeln!(out, "##phase_mnv_input={}", cfg.input_path)?;
+    if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
+        writeln!(out, "##phase_mnv_phase_from_bam={bam_path}")?;
+        writeln!(
+            out,
+            "##phase_mnv_phase_model=experimental_read_linkage_greedy_parity"
+        )?;
+    }
     writeln!(out, "##reference={}", cfg.fasta_path)?;
     writeln!(out, "##INFO=<ID=TYPE,Number=1,Type=String,Description=\"Merged call type: MNV for pure SNV blocks, COMPLEX when indels are included\">")?;
     writeln!(out, "##INFO=<ID=NVAR,Number=1,Type=Integer,Description=\"Number of phased source variants merged into this call\">")?;
@@ -963,6 +1642,20 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         cfg.no_ref_check,
         cfg.no_header
     );
+    if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
+        eprintln!(
+            "phase_mnv: bam_phase input={} min_mapq={} min_baseq={} candidates={} informative_reads={} components={} phased_variants={} unphased_variants={} conflicts={}",
+            bam_path,
+            cfg.phase_min_mapq,
+            cfg.phase_min_baseq,
+            st.bam_phase_candidates,
+            st.bam_phase_informative_reads,
+            st.bam_phase_components,
+            st.bam_phase_phased_variants,
+            st.bam_phase_unphased_variants,
+            st.bam_phase_conflicts
+        );
+    }
     eprintln!(
         "phase_mnv: records={} phased_records={} haplotype_variant_observations={} emitted_calls={}",
         st.records, st.phased_records, st.observations, st.emitted

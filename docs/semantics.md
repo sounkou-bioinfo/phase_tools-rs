@@ -19,9 +19,28 @@ C implementation is kept byte-identical for this scope.
   haplotype/phase set. `--max-gap N` permits up to `N` unchanged reference bases
   between source variants.
 
-## BAM-backed pre-phasing helper
+## BAM-backed phasing
 
-`phase_mnv_rs` itself consumes already phased VCF/BCF. For read-backed phasing,
+The default mode consumes already phased VCF/BCF. The Rust binary also has an
+experimental read-backed phasing mode:
+
+```bash
+--phase-from-bam reads.bam
+```
+
+In this mode input `GT` phase separators and `FORMAT/PS` values are ignored.
+The Rust implementation uses `rust-htslib` to read an indexed BAM/CRAM, extracts
+per-read allele observations at heterozygous diploid VCF records, builds
+read-supported pairwise allele co-occurrence constraints, greedily constructs
+connected parity components, assigns deterministic `PS` values from the first
+variant in each component, and then runs the normal MNV/COMPLEX construction.
+
+This mode is inspired by WhatsHap's read-backed phasing model, but it is not yet
+a full implementation of WhatsHap's MEC/PedMEC optimization or all WhatsHap
+options. The compatibility contract is currently the tracked Rust fixture and
+local validation against WhatsHap on real data, not byte identity with WhatsHap.
+
+For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:
 
 1. runs `scripts/unphase_vcf.py` to replace `|` with `/` in GT fields;
@@ -32,8 +51,7 @@ C implementation is kept byte-identical for this scope.
 4. runs `phase_mnv_rs` on the WhatsHap-phased VCF.
 
 The unphasing helper does not change alleles, filters, INFO fields, or non-phase
-FORMAT values. It is a preparation step for external phasing, not a new phasing
-algorithm inside `phase_mnv_rs`.
+FORMAT values. It is a preparation step for external phasing comparisons.
 
 ## Output model
 

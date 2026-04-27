@@ -29,6 +29,7 @@ clean:
 
 test: release
 	./tests/test_phase_mnv.sh $(RELEASE_BIN)
+	./tests/test_bam_phase.sh $(RELEASE_BIN)
 	./tests/test_negative.sh $(RELEASE_BIN)
 
 negative-test: release

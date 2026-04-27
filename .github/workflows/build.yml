@@ -71,6 +71,7 @@ jobs:
         shell: bash
         run: |
           ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
+          ./tests/test_bam_phase.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
 
       - name: Build C static/bundled-htslib binary

@@ -11,9 +11,9 @@ The repository contains two implementations:
 
 The Rust and C outputs are expected to be byte-identical for the supported
 scope. The Rust implementation depends on `rust-htslib` instead of directly on
-`hts-sys` so future work can reuse higher-level BAM/BCF APIs for Whatshap-like
-read-backed phasing while still dropping to `rust_htslib::htslib` where exact
-htslib behavior is needed.
+`hts-sys` so it can use higher-level BAM/BCF APIs for experimental
+WhatsHap-inspired read-backed phasing while still dropping to
+`rust_htslib::htslib` where exact htslib behavior is needed.
 
 ## Citation
 
@@ -107,6 +107,11 @@ options:
       --unsupported-alleles MODE
                         Selected unsupported allele policy: skip or fail
                         (default: skip)
+      --phase-from-bam FILE
+                        Experimental Rust read-backed phasing from indexed BAM/CRAM
+                        before MNV construction; input GT phase/PS is ignored
+      --phase-min-mapq N  Minimum read MAPQ for --phase-from-bam (default: 20)
+      --phase-min-baseq N Minimum base quality for --phase-from-bam (default: 13)
       --warn-on-n        Warn when a selected REF/ALT allele contains N
       --no-ref-check     Do not fail when VCF REF differs from FASTA
       --no-header        Suppress VCF header
@@ -126,6 +131,9 @@ Notes:
   * FORMAT/PS is honored when present; variants are only merged within the
     same phase set. If PS is absent, the phase separator and proximity
     define the merge block.
+  * --phase-from-bam is a Rust-only experimental phaser inspired by
+    WhatsHap's read-backed phasing model. It currently phases variants by
+    read-supported allele co-occurrence in connected components.
   * With the default --max-gap 0, only adjacent phased variants are
     merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are
     TYPE=COMPLEX.
@@ -230,12 +238,33 @@ Output:
 Rust and C outputs are byte-identical on explicit fixture tests/fixtures/byte_identity.vcf
 ```
 
-### BAM-backed phasing with WhatsHap before MNV construction
+### Experimental Rust BAM-backed phasing before MNV construction
 
-If a VCF is unphased, or if you want to discard caller-provided phase and phase
-from reads, use the helper workflow below. It first converts all GT separators
-from `|` to `/`, drops `FORMAT/PS` and `FORMAT/PQ` by default, runs
-`whatshap phase`, then runs `phase_mnv_rs` on the WhatsHap-phased VCF.
+The Rust binary can now phase from an indexed BAM/CRAM before constructing MNVs:
+
+```bash
+target/release/phase_mnv_rs \
+  --reference ref.fa \
+  --sample S1 \
+  --phase-from-bam reads.bam \
+  --max-gap 100 \
+  --output mnv.vcf \
+  chromosome.vcf.gz
+```
+
+This Rust-only mode ignores input `GT` phase and `FORMAT/PS`, extracts allele
+co-occurrence from reads with `rust-htslib`, builds connected phase components,
+assigns deterministic `PS` values from the first variant in each component, and
+then runs the normal MNV/COMPLEX construction. It is intentionally described as
+experimental: it is WhatsHap-inspired, but not yet a full clone of WhatsHap's
+PedMEC/MEC optimization.
+
+### BAM-backed phasing with external WhatsHap before MNV construction
+
+For the established upstream phaser, or for comparison against the Rust phaser,
+use the helper workflow below. It first converts all GT separators from `|` to
+`/`, drops `FORMAT/PS` and `FORMAT/PQ` by default, runs `whatshap phase`, then
+runs `phase_mnv_rs` on the WhatsHap-phased VCF.
 
 Install the external phasing/indexing tools if needed:
 
@@ -313,6 +342,11 @@ tests/fixtures/symbolic.vcf
 tests/fixtures/symbolic.max1.expected.body.vcf
 tests/fixtures/n_base.vcf
 tests/fixtures/n_base.expected.body.vcf
+tests/fixtures/read_phase.vcf
+tests/fixtures/read_phase.sam
+tests/fixtures/read_phase.bam
+tests/fixtures/read_phase.bam.bai
+tests/fixtures/read_phase.expected.body.vcf
 tests/fixtures/byte_identity.vcf
 tests/fixtures/ref_mismatch.vcf
 tests/fixtures/truncated.vcf.gz
