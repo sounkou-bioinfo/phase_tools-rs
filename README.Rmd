@@ -386,6 +386,8 @@ projected columns only:
 CHROM POS REF ALT GT
 ```
 
+Detailed validation notes are in [`docs/validation.md`](docs/validation.md).
+
 The most relevant upstream tools are:
 
 - `vcflib vcfgeno2haplo` — closest conceptual match for converting phased
@@ -404,6 +406,7 @@ GitHub Actions builds and tests both implementations on Linux and macOS:
 - C binary with bundled static `libhts.a`
 - behavior and negative/failure-mode tests for both binaries
 - byte-identical Rust-vs-C synthetic fixture test
+- Linux semantic-projection comparison against `vcflib=1.0.15` `vcfgeno2haplo`
 - binary artifact upload with SHA256 sums
 
 ## Notes

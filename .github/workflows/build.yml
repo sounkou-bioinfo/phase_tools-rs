@@ -101,6 +101,22 @@ jobs:
         shell: bash
         run: ./tests/byte_identical_synthetic.sh "${{ steps.rust-bin.outputs.path }}" c/phase_mnv
 
+      - name: Set up micromamba with vcflib
+        if: runner.os == 'Linux'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: phase-mnv-vcflib
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            vcflib=1.0.15
+          cache-environment: true
+
+      - name: Compare with vcflib vcfgeno2haplo semantic projection
+        if: runner.os == 'Linux'
+        shell: bash
+        run: make compare-vcflib
+
       - name: Package binaries
         shell: bash
         run: |
