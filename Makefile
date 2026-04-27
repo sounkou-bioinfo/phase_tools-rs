@@ -7,7 +7,7 @@ TARGET_ARG := $(if $(TARGET),--target $(TARGET),)
 RELEASE_BIN ?= target/release/phase_mnv_rs
 STATIC_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_mnv_rs
 
-.PHONY: release static-release install install-static clean test negative-test c c-test c-negative-test c-static byte-test readme readme-external-example check-readme
+.PHONY: release static-release install install-static clean test negative-test c c-test c-negative-test c-static byte-test compare-vcflib readme readme-external-example check-readme
 
 release:
 	$(CARGO) build --release $(TARGET_ARG)
@@ -48,6 +48,9 @@ c-static:
 
 byte-test: release c-test
 	./test_byte_identical.sh
+
+compare-vcflib: release
+	./scripts/compare_vcfgeno2haplo.sh
 
 readme: release c
 	Rscript -e 'invisible(suppressWarnings(knitr::knit("README.Rmd", "README.md", quiet = TRUE)))'

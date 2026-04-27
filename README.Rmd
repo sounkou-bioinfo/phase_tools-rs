@@ -290,6 +290,7 @@ tests/fixtures/complex.expected.body.vcf
 tests/fixtures/byte_identity.vcf
 tests/fixtures/ref_mismatch.vcf
 tests/fixtures/truncated.vcf.gz
+tests/fixtures/vcfgeno2haplo_compare.vcf
 ```
 
 Run Rust behavior and negative/failure-mode tests:
@@ -360,6 +361,29 @@ needed for comparison or compatibility work:
 
 ```bash
 ./scripts/clone_reference_impls.sh
+```
+
+### Optional `vcflib vcfgeno2haplo` comparison
+
+`vcfgeno2haplo` is the closest conceptual match for phased genotype-to-haplotype
+allele construction, but it is not a byte-identity oracle for this tool. It does
+not emit the same `TYPE=MNV`/`TYPE=COMPLEX` schema and it ignores `FORMAT/PS`, so
+we compare a narrow semantic projection on a fixture designed for the overlapping
+scope: adjacent phased SNVs in one sample.
+
+Run the comparison with micromamba-managed vcflib:
+
+```bash
+make compare-vcflib
+```
+
+The script uses `vcfgeno2haplo` from `PATH` when available, or creates/runs a
+micromamba environment named `phase-mnv-vcflib` with `vcflib=1.0.15` by default.
+Override with `VCFLIB_ENV` or `VCFLIB_SPEC` when needed. It compares these
+projected columns only:
+
+```text
+CHROM POS REF ALT GT
 ```
 
 The most relevant upstream tools are:
