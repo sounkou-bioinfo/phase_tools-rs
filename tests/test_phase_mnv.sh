@@ -10,6 +10,13 @@ trap 'rm -rf "$tmp"' EXIT
 cp "$fixtures/ref.fa" "$tmp/ref.fa"
 ref="$tmp/ref.fa"
 
+help="$tmp/help.txt"
+"$bin" --help > "$help"
+grep -q "Multi-allelic input sites use the ALT allele selected" "$help"
+grep -q "unselected ALTs are ignored and output" "$help"
+grep -q "Symbolic, breakend, spanning-deletion" "$help"
+grep -q "currently not barriers" "$help"
+
 run_body() {
   local input=$1
   local output=$2

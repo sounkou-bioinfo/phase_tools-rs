@@ -110,8 +110,14 @@ options:
   -h, --help             Show this help
 
 Notes:
-  * Only phased diploid GT (e.g. 0|1, 1|0, 1|1) is used. Unphased
-    genotypes and symbolic/breakend/non-DNA alleles are skipped.
+  * Only phased diploid GT (e.g. 0|1, 1|0, 1|1, 1|2) is used.
+    Unphased, missing, and non-diploid genotypes are skipped.
+  * Multi-allelic input sites use the ALT allele selected by each
+    haplotype's GT allele index; unselected ALTs are ignored and output
+    remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and
+    ALT2 on haplotype 2.
+  * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles
+    are skipped. Skipped unsupported alleles are currently not barriers.
   * FORMAT/PS is honored when present; variants are only merged within the
     same phase set. If PS is absent, the phase separator and proximity
     define the merge block.
@@ -143,8 +149,14 @@ options:
   -h, --help             Show this help
 
 Notes:
-  * Only phased diploid GT (e.g. 0|1, 1|0, 1|1) is used. Unphased
-    genotypes and symbolic/breakend/non-DNA alleles are skipped.
+  * Only phased diploid GT (e.g. 0|1, 1|0, 1|1, 1|2) is used.
+    Unphased, missing, and non-diploid genotypes are skipped.
+  * Multi-allelic input sites use the ALT allele selected by each
+    haplotype's GT allele index; unselected ALTs are ignored and output
+    remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and
+    ALT2 on haplotype 2.
+  * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles
+    are skipped. Skipped unsupported alleles are currently not barriers.
   * FORMAT/PS is honored when present; variants are only merged within the
     same phase set. If PS is absent, the phase separator and proximity
     define the merge block.
