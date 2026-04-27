@@ -19,6 +19,22 @@ C implementation is kept byte-identical for this scope.
   haplotype/phase set. `--max-gap N` permits up to `N` unchanged reference bases
   between source variants.
 
+## BAM-backed pre-phasing helper
+
+`phase_mnv_rs` itself consumes already phased VCF/BCF. For read-backed phasing,
+`scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:
+
+1. runs `scripts/unphase_vcf.py` to replace `|` with `/` in GT fields;
+2. drops `FORMAT/PS` and `FORMAT/PQ` by default, because those tags describe the
+   discarded phase state;
+3. runs `whatshap phase` with an explicitly supplied BAM/CRAM and reference
+   FASTA;
+4. runs `phase_mnv_rs` on the WhatsHap-phased VCF.
+
+The unphasing helper does not change alleles, filters, INFO fields, or non-phase
+FORMAT values. It is a preparation step for external phasing, not a new phasing
+algorithm inside `phase_mnv_rs`.
+
 ## Output model
 
 - Output records are biallelic merged haplotype records.

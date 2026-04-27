@@ -230,6 +230,50 @@ Output:
 Rust and C outputs are byte-identical on explicit fixture tests/fixtures/byte_identity.vcf
 ```
 
+### BAM-backed phasing with WhatsHap before MNV construction
+
+If a VCF is unphased, or if you want to discard caller-provided phase and phase
+from reads, use the helper workflow below. It first converts all GT separators
+from `|` to `/`, drops `FORMAT/PS` and `FORMAT/PQ` by default, runs
+`whatshap phase`, then runs `phase_mnv_rs` on the WhatsHap-phased VCF.
+
+Install the external phasing/indexing tools if needed:
+
+```bash
+micromamba create -y -n phase-mnv-whatshap -c conda-forge -c bioconda \
+  whatshap bcftools samtools
+micromamba run -n phase-mnv-whatshap whatshap --version
+```
+
+Run the local BAM-backed phasing workflow with explicit local paths:
+
+```bash
+./scripts/phase_from_bam_then_mnv.sh \
+  --reference ref.fa \
+  --bam reads.bam \
+  --vcf chromosome.vcf.gz \
+  --sample S1 \
+  --max-gap 100 \
+  --out-dir local_runs/S1-chromosome
+```
+
+The helper writes:
+
+```text
+PREFIX.unphased.vcf.gz
+PREFIX.whatshap.vcf.gz
+PREFIX.phase_mnv.vcf
+PREFIX.whatshap.log
+PREFIX.phase_mnv.log
+```
+
+The unphasing step can also be run directly:
+
+```bash
+python3 scripts/unphase_vcf.py input.vcf.gz | bgzip -c > input.unphased.vcf.gz
+bcftools index -f input.unphased.vcf.gz
+```
+
 ### Optional local larger VCF example
 
 The committed README only runs tracked fixtures. To exercise a larger local VCF

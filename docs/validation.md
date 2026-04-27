@@ -41,6 +41,8 @@ Behavior fixtures cover:
 - selected ALT handling at multi-allelic sites
 - symbolic/non-DNA ALT skipping semantics
 - `--warn-on-n` warnings while preserving `N` as plain DNA
+- `scripts/unphase_vcf.py` conversion of phased GT separators to unphased GT
+  while dropping phase-specific FORMAT tags by default
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures
