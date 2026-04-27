@@ -1,0 +1,107 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Rust formatting
+        shell: bash
+        run: cargo fmt --check
+
+      - name: Show explicit test fixtures
+        shell: bash
+        run: |
+          find tests/fixtures -type f -maxdepth 1 -print | sort
+          sed -n '1,20p' tests/fixtures/phased_mnv.expected.body.vcf
+
+      - name: Build Rust release/static where supported
+        shell: bash
+        run: make static-release
+
+      - name: Locate Rust binary
+        id: rust-bin
+        shell: bash
+        run: |
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            host=$(rustc -vV | sed -n 's/^host: //p')
+            bin="target/${host}/release/phase_mnv_rs"
+          else
+            bin="target/release/phase_mnv_rs"
+          fi
+          test -x "$bin"
+          echo "path=$bin" >> "$GITHUB_OUTPUT"
+          file "$bin"
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            ldd "$bin" || true
+          else
+            otool -L "$bin"
+          fi
+
+      - name: Test Rust binary
+        shell: bash
+        run: ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
+
+      - name: Build C static/bundled-htslib binary
+        shell: bash
+        run: ./scripts/build_c_static.sh
+
+      - name: Inspect C binary
+        shell: bash
+        run: |
+          file c/phase_mnv
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            ldd c/phase_mnv || true
+          else
+            otool -L c/phase_mnv
+          fi
+
+      - name: Test C binary
+        shell: bash
+        run: ./tests/test_phase_mnv.sh c/phase_mnv
+
+      - name: Check Rust/C byte identity on synthetic fixture
+        shell: bash
+        run: ./tests/byte_identical_synthetic.sh "${{ steps.rust-bin.outputs.path }}" c/phase_mnv
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          mkdir -p dist-ci
+          suffix="$(printf '%s-%s' "$RUNNER_OS" "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
+          cp "${{ steps.rust-bin.outputs.path }}" "dist-ci/phase_mnv_rs-${suffix}"
+          cp c/phase_mnv "dist-ci/phase_mnv_c-${suffix}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
+          else
+            shasum -a 256 dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
+          fi
+          cat "dist-ci/SHA256SUMS-${suffix}.txt"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase_mnv-${{ runner.os }}-${{ runner.arch }}
+          path: dist-ci/*

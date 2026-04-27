@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: >-
+  If you use phase_mnv_rs, please cite this software and explicitly cite the
+  variant-normalization paper whose left-aligned + parsimonious representation
+  is implemented here: Tan, Abecasis, and Kang (2015), DOI
+  10.1093/bioinformatics/btv112.
+title: phase_mnv_rs
+type: software
+authors:
+  - family-names: Toure
+    given-names: Sounkou
+    email: sounkoutoure@gmail.com
+repository-code: https://github.com/sounkou-bioinfo/phase_mnv_rs
+license: MIT
+version: 0.1.0
+references:
+  - type: article
+    title: Unified representation of genetic variants
+    authors:
+      - family-names: Tan
+        given-names: Adrian
+      - family-names: Abecasis
+        given-names: Gonçalo R.
+      - family-names: Kang
+        given-names: Hyun Min
+    journal: Bioinformatics
+    year: 2015
+    volume: 31
+    issue: 13
+    start: 2202
+    end: 2204
+    doi: 10.1093/bioinformatics/btv112
+    url: https://doi.org/10.1093/bioinformatics/btv112

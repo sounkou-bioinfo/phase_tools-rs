@@ -1,0 +1,13 @@
+/target/
+/dist/
+/.build/
+/c/phase_mnv
+*.tmp
+*.log
+*.vcf
+*.bcf
+*.vcf.gz
+!/tests/fixtures/*.vcf
+*.bcf.csi
+*.vcf.gz.tbi
+.DS_Store

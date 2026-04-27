@@ -1,0 +1,19 @@
+[package]
+name = "phase_mnv_rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust phased VCF/BCF haplotype MNV/complex builder with vt-style normalization"
+
+[[bin]]
+name = "phase_mnv_rs"
+path = "src/main.rs"
+
+[dependencies]
+rust-htslib = { version = "0.46.0", default-features = false, features = ["static"] }
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
