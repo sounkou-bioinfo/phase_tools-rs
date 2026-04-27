@@ -34,6 +34,11 @@
 #define bcf_int32_vector_end (INT32_MIN + 1)
 #endif
 
+typedef enum {
+    UNSUPPORTED_ALLELES_SKIP = 0,
+    UNSUPPORTED_ALLELES_FAIL = 1
+} UnsupportedAllelesPolicy;
+
 typedef struct {
     const char *input_path;
     const char *fasta_path;
@@ -41,6 +46,8 @@ typedef struct {
     const char *sample_name;
     int64_t max_gap;
     int min_variants;
+    UnsupportedAllelesPolicy unsupported_alleles;
+    bool warn_on_n;
     bool no_ref_check;
     bool no_header;
     bool quiet;
@@ -87,12 +94,19 @@ typedef struct {
     uint64_t records;
     uint64_t phased_records;
     uint64_t observations;
+    uint64_t multiallelic_records;
+    uint64_t observations_with_n;
     uint64_t skipped_no_gt;
     uint64_t skipped_not_diploid;
     uint64_t skipped_missing_gt;
     uint64_t skipped_unphased;
     uint64_t skipped_ref;
     uint64_t skipped_unsupported_alt;
+    uint64_t skipped_alt_out_of_range;
+    uint64_t skipped_alt_symbolic_or_breakend;
+    uint64_t skipped_alt_spanning_deletion;
+    uint64_t skipped_alt_non_dna;
+    uint64_t skipped_alt_same_as_ref;
     uint64_t skipped_ref_allele;
     uint64_t emitted;
 } Stats;
@@ -152,6 +166,33 @@ static bool is_plain_dna_allele(const char *allele) {
         if (!is_dna_base(*p)) return false;
     }
     return true;
+}
+
+static bool contains_n_base(const char *allele) {
+    if (!allele) return false;
+    for (const char *p = allele; *p; ++p) {
+        if (upbase(*p) == 'N') return true;
+    }
+    return false;
+}
+
+static const char *unsupported_alt_kind(const char *allele) {
+    if (allele && strcmp(allele, "*") == 0) return "spanning_deletion";
+    if (is_symbolic_or_breakend(allele)) return "symbolic_or_breakend";
+    return "non_dna";
+}
+
+static const char *unsupported_policy_name(UnsupportedAllelesPolicy policy) {
+    switch (policy) {
+        case UNSUPPORTED_ALLELES_SKIP: return "skip";
+        case UNSUPPORTED_ALLELES_FAIL: return "fail";
+        default: return "unknown";
+    }
+}
+
+static const char *output_label(const Config *cfg) {
+    if (!cfg->output_path || strcmp(cfg->output_path, "-") == 0) return "stdout";
+    return cfg->output_path;
 }
 
 static bool is_snv_allele_pair(const char *ref, const char *alt) {
@@ -214,6 +255,10 @@ static void print_usage(FILE *out) {
         "                        phased variants when building one merged call (default: 0)\n"
         "      --min-vars N       Minimum source variants per emitted call (default: 2)\n"
         "      --min-snvs N       Alias for --min-vars\n"
+        "      --unsupported-alleles MODE\n"
+        "                        Selected unsupported allele policy: skip or fail\n"
+        "                        (default: skip)\n"
+        "      --warn-on-n        Warn when a selected REF/ALT allele contains N\n"
         "      --no-ref-check     Do not fail when VCF REF differs from FASTA\n"
         "      --no-header        Suppress VCF header\n"
         "  -q, --quiet            Suppress summary on stderr\n"
@@ -227,13 +272,17 @@ static void print_usage(FILE *out) {
         "    remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and\n"
         "    ALT2 on haplotype 2.\n"
         "  * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles\n"
-        "    are skipped. Skipped unsupported alleles are currently not barriers.\n"
+        "    are skipped by default and are currently not barriers; use\n"
+        "    --unsupported-alleles fail to reject selected unsupported alleles.\n"
         "  * FORMAT/PS is honored when present; variants are only merged within the\n"
         "    same phase set. If PS is absent, the phase separator and proximity\n"
         "    define the merge block.\n"
         "  * With the default --max-gap 0, only adjacent phased variants are\n"
         "    merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are\n"
         "    TYPE=COMPLEX.\n"
+        "  * Unless --quiet is set, summary stats go to stderr and include\n"
+        "    input/reference/output (output=stdout for VCF stdout), settings,\n"
+        "    skip counts, unsupported categories, and N counts.\n"
     );
 }
 
@@ -246,6 +295,13 @@ static int64_t parse_i64(const char *s, const char *name) {
         exit(EXIT_FAILURE);
     }
     return (int64_t)v;
+}
+
+static UnsupportedAllelesPolicy parse_unsupported_alleles_policy(const char *s) {
+    if (strcmp(s, "skip") == 0) return UNSUPPORTED_ALLELES_SKIP;
+    if (strcmp(s, "fail") == 0) return UNSUPPORTED_ALLELES_FAIL;
+    die("--unsupported-alleles must be one of: skip, fail");
+    return UNSUPPORTED_ALLELES_SKIP;
 }
 
 static Config parse_args(int argc, char **argv) {
@@ -263,6 +319,9 @@ static Config parse_args(int argc, char **argv) {
         {"min-vars",     required_argument, 0,  1 },
         {"no-ref-check", no_argument,       0,  2 },
         {"no-header",    no_argument,       0,  3 },
+        {"unsupported-alleles", required_argument, 0, 4},
+        {"warn-on-n",    no_argument,       0,  5 },
+        {"warm-on-n",    no_argument,       0,  5 },
         {"quiet",        no_argument,       0, 'q'},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
@@ -280,6 +339,8 @@ static Config parse_args(int argc, char **argv) {
             case 1: cfg.min_variants = (int)parse_i64(optarg, "--min-vars"); break;
             case 2: cfg.no_ref_check = true; break;
             case 3: cfg.no_header = true; break;
+            case 4: cfg.unsupported_alleles = parse_unsupported_alleles_policy(optarg); break;
+            case 5: cfg.warn_on_n = true; break;
             default: print_usage(stderr); exit(EXIT_FAILURE);
         }
     }
@@ -349,6 +410,7 @@ static void read_observations(const Config *cfg, bcf_hdr_t **out_hdr, int *out_s
     while ((read_ret = bcf_read(in, hdr, rec)) == 0) {
         st->records++;
         bcf_unpack(rec, BCF_UN_STR | BCF_UN_FMT);
+        if (rec->n_allele > 2) st->multiallelic_records++;
 
         int ngt = bcf_get_genotypes(hdr, rec, &gt_arr, &ngt_arr);
         if (ngt <= 0) {
@@ -381,13 +443,20 @@ static void read_observations(const Config *cfg, bcf_hdr_t **out_hdr, int *out_s
         }
         st->phased_records++;
 
+        int64_t pos1 = (int64_t)rec->pos + 1;
+        const char *chrom = bcf_hdr_id2name(hdr, rec->rid);
+        if (!chrom) chrom = ".";
         if (rec->n_allele < 1 || !is_plain_dna_allele(rec->d.allele[0])) {
             st->skipped_ref++;
+            if (cfg->unsupported_alleles == UNSUPPORTED_ALLELES_FAIL) {
+                fprintf(stderr, "error: unsupported REF allele at %s:%" PRId64 " REF=%s\n",
+                        chrom, pos1, rec->n_allele < 1 ? "" : rec->d.allele[0]);
+                exit(EXIT_FAILURE);
+            }
             continue;
         }
 
         int64_t ps = get_sample_ps(hdr, rec, sample_idx, &ps_arr, &nps_arr);
-        int64_t pos1 = (int64_t)rec->pos + 1;
         const char *ref_allele = rec->d.allele[0];
         size_t ref_len = strlen(ref_allele);
 
@@ -399,15 +468,39 @@ static void read_observations(const Config *cfg, bcf_hdr_t **out_hdr, int *out_s
             }
             if (allele < 0 || allele >= rec->n_allele) {
                 st->skipped_unsupported_alt++;
+                st->skipped_alt_out_of_range++;
+                if (cfg->unsupported_alleles == UNSUPPORTED_ALLELES_FAIL) {
+                    fprintf(stderr,
+                            "error: unsupported selected ALT allele index at %s:%" PRId64 " hap=%d allele=%d\n",
+                            chrom, pos1, hap + 1, allele);
+                    exit(EXIT_FAILURE);
+                }
                 continue;
             }
             const char *alt_allele = rec->d.allele[allele];
             if (!is_plain_dna_allele(alt_allele)) {
                 st->skipped_unsupported_alt++;
+                const char *kind = unsupported_alt_kind(alt_allele);
+                if (strcmp(kind, "symbolic_or_breakend") == 0) st->skipped_alt_symbolic_or_breakend++;
+                else if (strcmp(kind, "spanning_deletion") == 0) st->skipped_alt_spanning_deletion++;
+                else st->skipped_alt_non_dna++;
+                if (cfg->unsupported_alleles == UNSUPPORTED_ALLELES_FAIL) {
+                    fprintf(stderr,
+                            "error: unsupported selected ALT allele at %s:%" PRId64 " hap=%d ALT=%s kind=%s\n",
+                            chrom, pos1, hap + 1, alt_allele, kind);
+                    exit(EXIT_FAILURE);
+                }
                 continue;
             }
             if (strcasecmp(ref_allele, alt_allele) == 0) {
                 st->skipped_unsupported_alt++;
+                st->skipped_alt_same_as_ref++;
+                if (cfg->unsupported_alleles == UNSUPPORTED_ALLELES_FAIL) {
+                    fprintf(stderr,
+                            "error: unsupported selected ALT allele at %s:%" PRId64 " hap=%d ALT equals REF (%s)\n",
+                            chrom, pos1, hap + 1, alt_allele);
+                    exit(EXIT_FAILURE);
+                }
                 continue;
             }
             Obs x;
@@ -419,6 +512,14 @@ static void read_observations(const Config *cfg, bcf_hdr_t **out_hdr, int *out_s
             x.end = pos1 + (int64_t)ref_len - 1;
             x.ref = xstrdup_upper(ref_allele);
             x.alt = xstrdup_upper(alt_allele);
+            if (contains_n_base(x.ref) || contains_n_base(x.alt)) {
+                st->observations_with_n++;
+                if (cfg->warn_on_n) {
+                    fprintf(stderr,
+                            "warning: N base in selected allele at %s:%" PRId64 " hap=%d REF=%s ALT=%s\n",
+                            chrom, pos1, hap + 1, x.ref, x.alt);
+                }
+            }
             x.is_snv = is_snv_allele_pair(x.ref, x.alt);
             obs_push(obs, x);
             st->observations++;
@@ -833,16 +934,35 @@ static void write_calls(FILE *out, const bcf_hdr_t *hdr, const CallVec *calls, S
 static void print_summary(const Config *cfg, const Stats *st, const char *sample) {
     if (cfg->quiet) return;
     fprintf(stderr,
-            "phase_mnv: sample=%s records=%" PRIu64 " phased_records=%" PRIu64
+            "phase_mnv: input=%s reference=%s output=%s sample=%s\n",
+            cfg->input_path, cfg->fasta_path, output_label(cfg), sample);
+    fprintf(stderr,
+            "phase_mnv: settings max_gap=%" PRId64 " min_vars=%d unsupported_alleles=%s warn_on_n=%s no_ref_check=%s no_header=%s\n",
+            cfg->max_gap, cfg->min_variants, unsupported_policy_name(cfg->unsupported_alleles),
+            cfg->warn_on_n ? "true" : "false",
+            cfg->no_ref_check ? "true" : "false",
+            cfg->no_header ? "true" : "false");
+    fprintf(stderr,
+            "phase_mnv: records=%" PRIu64 " phased_records=%" PRIu64
             " haplotype_variant_observations=%" PRIu64 " emitted_calls=%" PRIu64 "\n",
-            sample, st->records, st->phased_records, st->observations, st->emitted);
+            st->records, st->phased_records, st->observations, st->emitted);
     fprintf(stderr,
             "phase_mnv: skipped no_gt=%" PRIu64 " non_diploid=%" PRIu64
-            " missing_gt=%" PRIu64 " unphased=%" PRIu64 " unsupported_ref=%" PRIu64
-            " unsupported_alt=%" PRIu64 " ref_hap_alleles=%" PRIu64 "\n",
+            " missing_gt=%" PRIu64 " unphased=%" PRIu64 " ref_hap_alleles=%" PRIu64 "\n",
             st->skipped_no_gt, st->skipped_not_diploid, st->skipped_missing_gt,
-            st->skipped_unphased, st->skipped_ref, st->skipped_unsupported_alt,
-            st->skipped_ref_allele);
+            st->skipped_unphased, st->skipped_ref_allele);
+    fprintf(stderr,
+            "phase_mnv: unsupported ref_non_dna=%" PRIu64 " alt_out_of_range=%" PRIu64
+            " alt_symbolic_or_breakend=%" PRIu64 " alt_spanning_deletion=%" PRIu64
+            " alt_non_dna=%" PRIu64 " alt_same_as_ref=%" PRIu64
+            " unsupported_alt_total=%" PRIu64 "\n",
+            st->skipped_ref, st->skipped_alt_out_of_range,
+            st->skipped_alt_symbolic_or_breakend, st->skipped_alt_spanning_deletion,
+            st->skipped_alt_non_dna, st->skipped_alt_same_as_ref,
+            st->skipped_unsupported_alt);
+    fprintf(stderr,
+            "phase_mnv: multiallelic_records=%" PRIu64 " observations_with_n=%" PRIu64 "\n",
+            st->multiallelic_records, st->observations_with_n);
 }
 
 int main(int argc, char **argv) {

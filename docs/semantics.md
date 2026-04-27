@@ -90,10 +90,28 @@ Skipped ALT examples:
 
 If the REF allele itself is not plain DNA, the whole record is skipped.
 
-Skipped symbolic/non-DNA alleles are **not currently barriers**. They are ignored
-as observations, and nearby supported variants may still merge across their
-positions when `--max-gap` permits the unchanged reference span. With
-`--max-gap 0`, directly adjacent supported variants are still required.
+Default policy is:
+
+```bash
+--unsupported-alleles skip
+```
+
+Under the default, skipped symbolic/non-DNA alleles are **not currently
+barriers**. They are ignored as observations, and nearby supported variants may
+still merge across their positions when `--max-gap` permits the unchanged
+reference span. With `--max-gap 0`, directly adjacent supported variants are
+still required.
+
+Use fail-fast policy to reject selected unsupported alleles instead of skipping
+them:
+
+```bash
+--unsupported-alleles fail
+```
+
+This fails when the selected sample/haplotype points to an unsupported ALT, when
+the selected ALT allele index is invalid, when a selected ALT equals REF, or when
+REF is unsupported. Unselected multi-allelic ALT alleles remain ignored.
 
 Tracked regression fixture:
 
@@ -101,6 +119,44 @@ Tracked regression fixture:
 tests/fixtures/symbolic.vcf
 tests/fixtures/symbolic.max1.expected.body.vcf
 ```
+
+## Ambiguous `N` bases
+
+`N` is currently treated as plain DNA, so selected alleles containing `N` can
+participate in merged calls. Use:
+
+```bash
+--warn-on-n
+```
+
+to emit a warning for each selected haplotype observation whose REF or ALT allele
+contains `N`. The run summary always reports `observations_with_n`, even when
+warnings are disabled. The typo alias `--warm-on-n` is accepted but not shown in
+help.
+
+Tracked regression fixture:
+
+```text
+tests/fixtures/n_base.vcf
+tests/fixtures/n_base.expected.body.vcf
+```
+
+## Statistics output
+
+Unless `--quiet` is set, summary statistics are written to stderr and include an
+explicit output destination:
+
+```text
+phase_mnv: input=... reference=... output=stdout sample=...
+phase_mnv: settings max_gap=... min_vars=... unsupported_alleles=... warn_on_n=... no_ref_check=... no_header=...
+phase_mnv: records=... phased_records=... haplotype_variant_observations=... emitted_calls=...
+phase_mnv: skipped no_gt=... non_diploid=... missing_gt=... unphased=... ref_hap_alleles=...
+phase_mnv: unsupported ref_non_dna=... alt_out_of_range=... alt_symbolic_or_breakend=... alt_spanning_deletion=... alt_non_dna=... alt_same_as_ref=... unsupported_alt_total=...
+phase_mnv: multiallelic_records=... observations_with_n=...
+```
+
+When output is written to stdout, the label is exactly `output=stdout`; the
+summary itself remains on stderr so it does not corrupt VCF stdout.
 
 ## Overlapping records
 
@@ -124,10 +180,10 @@ supported output scope, though both remain useful validators.
 
 The main unresolved policy questions are:
 
-1. Should unsupported symbolic/breakend/spanning-deletion alleles act as hard
-   barriers that prevent merging across their span or position?
+1. Should unsupported symbolic/breakend/spanning-deletion alleles gain a third
+   `barrier` policy that prevents merging across their span or position?
 2. Should `N` continue to be treated as plain DNA for merging, or should records
-   containing ambiguous bases be skipped by default?
+   containing ambiguous bases be skipped or failed by default?
 3. Should future output support true multi-ALT records when two haplotypes carry
    different ALT haplotypes over the same normalized span?
 4. Should overlapping phased records fail loudly instead of silently splitting

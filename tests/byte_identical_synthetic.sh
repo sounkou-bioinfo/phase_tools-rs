@@ -11,10 +11,11 @@ trap 'rm -rf "$tmp"' EXIT
 
 cp "$fixtures/ref.fa" "$tmp/ref.fa"
 
-"$c_bin" -r "$tmp/ref.fa" -s S1 -o "$tmp/c.vcf" "$fixtures/byte_identity.vcf" 2> "$tmp/c.log"
-"$rs_bin" -r "$tmp/ref.fa" -s S1 -o "$tmp/rs.vcf" "$fixtures/byte_identity.vcf" 2> "$tmp/rs.log"
+"$c_bin" -r "$tmp/ref.fa" -s S1 "$fixtures/byte_identity.vcf" > "$tmp/c.vcf" 2> "$tmp/c.log"
+"$rs_bin" -r "$tmp/ref.fa" -s S1 "$fixtures/byte_identity.vcf" > "$tmp/rs.vcf" 2> "$tmp/rs.log"
 
 cmp "$tmp/c.vcf" "$tmp/rs.vcf"
 cmp "$tmp/c.log" "$tmp/rs.log"
+grep -q "output=stdout" "$tmp/c.log"
 
 echo "Rust and C outputs are byte-identical on explicit fixture tests/fixtures/byte_identity.vcf"

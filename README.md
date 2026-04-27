@@ -104,6 +104,10 @@ options:
                         phased variants when building one merged call (default: 0)
       --min-vars N       Minimum source variants per emitted call (default: 2)
       --min-snvs N       Alias for --min-vars
+      --unsupported-alleles MODE
+                        Selected unsupported allele policy: skip or fail
+                        (default: skip)
+      --warn-on-n        Warn when a selected REF/ALT allele contains N
       --no-ref-check     Do not fail when VCF REF differs from FASTA
       --no-header        Suppress VCF header
   -q, --quiet            Suppress summary on stderr
@@ -117,13 +121,17 @@ Notes:
     remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and
     ALT2 on haplotype 2.
   * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles
-    are skipped. Skipped unsupported alleles are currently not barriers.
+    are skipped by default and are currently not barriers; use
+    --unsupported-alleles fail to reject selected unsupported alleles.
   * FORMAT/PS is honored when present; variants are only merged within the
     same phase set. If PS is absent, the phase separator and proximity
     define the merge block.
   * With the default --max-gap 0, only adjacent phased variants are
     merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are
     TYPE=COMPLEX.
+  * Unless --quiet is set, summary stats go to stderr and include
+    input/reference/output (output=stdout for VCF stdout), settings,
+    skip counts, unsupported categories, and N counts.
 ```
 
 ### C binary (`phase_mnv`)
@@ -143,6 +151,10 @@ options:
                         phased variants when building one merged call (default: 0)
       --min-vars N       Minimum source variants per emitted call (default: 2)
       --min-snvs N       Alias for --min-vars
+      --unsupported-alleles MODE
+                        Selected unsupported allele policy: skip or fail
+                        (default: skip)
+      --warn-on-n        Warn when a selected REF/ALT allele contains N
       --no-ref-check     Do not fail when VCF REF differs from FASTA
       --no-header        Suppress VCF header
   -q, --quiet            Suppress summary on stderr
@@ -156,13 +168,17 @@ Notes:
     remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and
     ALT2 on haplotype 2.
   * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles
-    are skipped. Skipped unsupported alleles are currently not barriers.
+    are skipped by default and are currently not barriers; use
+    --unsupported-alleles fail to reject selected unsupported alleles.
   * FORMAT/PS is honored when present; variants are only merged within the
     same phase set. If PS is absent, the phase separator and proximity
     define the merge block.
   * With the default --max-gap 0, only adjacent phased variants are
     merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are
     TYPE=COMPLEX.
+  * Unless --quiet is set, summary stats go to stderr and include
+    input/reference/output (output=stdout for VCF stdout), settings,
+    skip counts, unsupported categories, and N counts.
 ```
 
 ## Examples
@@ -251,6 +267,8 @@ tests/fixtures/multiallelic.vcf
 tests/fixtures/multiallelic.expected.body.vcf
 tests/fixtures/symbolic.vcf
 tests/fixtures/symbolic.max1.expected.body.vcf
+tests/fixtures/n_base.vcf
+tests/fixtures/n_base.expected.body.vcf
 tests/fixtures/byte_identity.vcf
 tests/fixtures/ref_mismatch.vcf
 tests/fixtures/truncated.vcf.gz

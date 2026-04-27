@@ -80,6 +80,10 @@ expect_fail "REF FASTA mismatch" \
   "REF/FASTA mismatch|Use --no-ref-check" \
   "$bin" -r "$ref" -s S1 "$fixtures/ref_mismatch.vcf"
 
+expect_fail "unsupported selected allele fail policy" \
+  "unsupported selected ALT allele|kind=symbolic_or_breakend" \
+  "$bin" -r "$ref" -s S1 --max-gap 1 --unsupported-alleles fail "$fixtures/symbolic.vcf"
+
 expect_fail "truncated gzip VCF" \
   "truncated|failed to read VCF/BCF header|failed to read VCF/BCF record|Reading GZIP stream failed" \
   "$bin" -r "$ref" -s S1 "$truncated_vcf"

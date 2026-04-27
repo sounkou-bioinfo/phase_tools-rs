@@ -12,6 +12,21 @@ const PS_MISSING: i64 = i64::MIN;
 const BCF_INT32_MISSING: i32 = i32::MIN;
 const BCF_INT32_VECTOR_END: i32 = i32::MIN + 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsupportedAllelesPolicy {
+    Skip,
+    Fail,
+}
+
+impl UnsupportedAllelesPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            UnsupportedAllelesPolicy::Skip => "skip",
+            UnsupportedAllelesPolicy::Fail => "fail",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Config {
     input_path: String,
@@ -20,6 +35,8 @@ struct Config {
     sample_name: Option<String>,
     max_gap: i64,
     min_variants: usize,
+    unsupported_alleles: UnsupportedAllelesPolicy,
+    warn_on_n: bool,
     no_ref_check: bool,
     no_header: bool,
     quiet: bool,
@@ -64,12 +81,19 @@ struct Stats {
     records: u64,
     phased_records: u64,
     observations: u64,
+    multiallelic_records: u64,
+    observations_with_n: u64,
     skipped_no_gt: u64,
     skipped_not_diploid: u64,
     skipped_missing_gt: u64,
     skipped_unphased: u64,
     skipped_ref: u64,
     skipped_unsupported_alt: u64,
+    skipped_alt_out_of_range: u64,
+    skipped_alt_symbolic_or_breakend: u64,
+    skipped_alt_spanning_deletion: u64,
+    skipped_alt_non_dna: u64,
+    skipped_alt_same_as_ref: u64,
     skipped_ref_allele: u64,
     emitted: u64,
 }
@@ -106,6 +130,10 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "                        phased variants when building one merged call (default: 0)\n",
             "      --min-vars N       Minimum source variants per emitted call (default: 2)\n",
             "      --min-snvs N       Alias for --min-vars\n",
+            "      --unsupported-alleles MODE\n",
+            "                        Selected unsupported allele policy: skip or fail\n",
+            "                        (default: skip)\n",
+            "      --warn-on-n        Warn when a selected REF/ALT allele contains N\n",
             "      --no-ref-check     Do not fail when VCF REF differs from FASTA\n",
             "      --no-header        Suppress VCF header\n",
             "  -q, --quiet            Suppress summary on stderr\n",
@@ -119,13 +147,17 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "    remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and\n",
             "    ALT2 on haplotype 2.\n",
             "  * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles\n",
-            "    are skipped. Skipped unsupported alleles are currently not barriers.\n",
+            "    are skipped by default and are currently not barriers; use\n",
+            "    --unsupported-alleles fail to reject selected unsupported alleles.\n",
             "  * FORMAT/PS is honored when present; variants are only merged within the\n",
             "    same phase set. If PS is absent, the phase separator and proximity\n",
             "    define the merge block.\n",
             "  * With the default --max-gap 0, only adjacent phased variants are\n",
             "    merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are\n",
-            "    TYPE=COMPLEX.\n"
+            "    TYPE=COMPLEX.\n",
+            "  * Unless --quiet is set, summary stats go to stderr and include\n",
+            "    input/reference/output (output=stdout for VCF stdout), settings,\n",
+            "    skip counts, unsupported categories, and N counts.\n"
         )
     )
 }
@@ -140,6 +172,14 @@ fn parse_i64(s: &str, name: &str) -> i64 {
     }
 }
 
+fn parse_unsupported_alleles_policy(s: &str) -> UnsupportedAllelesPolicy {
+    match s {
+        "skip" => UnsupportedAllelesPolicy::Skip,
+        "fail" => UnsupportedAllelesPolicy::Fail,
+        _ => die("--unsupported-alleles must be one of: skip, fail"),
+    }
+}
+
 fn parse_args() -> Config {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut fasta_path: Option<String> = None;
@@ -147,6 +187,8 @@ fn parse_args() -> Config {
     let mut sample_name: Option<String> = None;
     let mut max_gap = 0i64;
     let mut min_variants = 2usize;
+    let mut unsupported_alleles = UnsupportedAllelesPolicy::Skip;
+    let mut warn_on_n = false;
     let mut no_ref_check = false;
     let mut no_header = false;
     let mut quiet = false;
@@ -199,6 +241,14 @@ fn parse_args() -> Config {
                 }
                 min_variants = value as usize;
             }
+            "--unsupported-alleles" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--unsupported-alleles requires an argument");
+                }
+                unsupported_alleles = parse_unsupported_alleles_policy(&args[i]);
+            }
+            "--warn-on-n" | "--warm-on-n" => warn_on_n = true,
             "--no-ref-check" => no_ref_check = true,
             "--no-header" => no_header = true,
             "-q" | "--quiet" => quiet = true,
@@ -233,6 +283,8 @@ fn parse_args() -> Config {
         sample_name,
         max_gap,
         min_variants,
+        unsupported_alleles,
+        warn_on_n,
         no_ref_check,
         no_header,
         quiet,
@@ -254,6 +306,27 @@ fn is_symbolic_or_breakend(s: &[u8]) -> bool {
 
 fn is_plain_dna_allele(s: &[u8]) -> bool {
     !is_symbolic_or_breakend(s) && s.iter().all(|&b| is_dna_base(b))
+}
+
+fn contains_n_base(s: &[u8]) -> bool {
+    s.iter().any(|&b| upbase(b) == b'N')
+}
+
+fn unsupported_alt_kind(s: &[u8]) -> &'static str {
+    if s == b"*" {
+        "spanning_deletion"
+    } else if is_symbolic_or_breakend(s) {
+        "symbolic_or_breakend"
+    } else {
+        "non_dna"
+    }
+}
+
+fn output_label(cfg: &Config) -> &str {
+    match cfg.output_path.as_deref() {
+        None | Some("-") => "stdout",
+        Some(path) => path,
+    }
 }
 
 fn uppercase_ascii_string(s: &[u8]) -> String {
@@ -368,6 +441,9 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
     while let Some(result) = reader.read(&mut record) {
         result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
         st.records += 1;
+        if record.alleles().len() > 2 {
+            st.multiallelic_records += 1;
+        }
 
         let genotypes = match record.genotypes() {
             Ok(g) => g,
@@ -394,16 +470,31 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
         let alleles = record.alleles();
         if alleles.is_empty() {
             st.skipped_ref += 1;
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                return Err("unsupported empty REF allele".to_string());
+            }
             continue;
         }
         let ref_bytes = alleles[0];
+        let pos1 = record.pos() + 1;
+        let rid = record.rid().unwrap_or(0) as usize;
+        let chrom = header_info
+            .rid_names
+            .get(rid)
+            .map(String::as_str)
+            .unwrap_or(".");
         if !is_plain_dna_allele(ref_bytes) {
             st.skipped_ref += 1;
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                let ref_allele = uppercase_ascii_string(ref_bytes);
+                return Err(format!(
+                    "unsupported REF allele at {chrom}:{pos1} REF={ref_allele}"
+                ));
+            }
             continue;
         }
 
         let ps = get_sample_ps(&record, sample_idx);
-        let pos1 = record.pos() + 1;
         let ref_allele = uppercase_ascii_string(ref_bytes);
         let ref_len = ref_allele.len() as i64;
 
@@ -415,17 +506,55 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
             }
             if allele < 0 || allele as usize >= alleles.len() {
                 st.skipped_unsupported_alt += 1;
+                st.skipped_alt_out_of_range += 1;
+                if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                    return Err(format!(
+                        "unsupported selected ALT allele index at {chrom}:{pos1} hap={} allele={allele}",
+                        hap + 1
+                    ));
+                }
                 continue;
             }
             let alt_bytes = alleles[allele as usize];
             if !is_plain_dna_allele(alt_bytes) {
                 st.skipped_unsupported_alt += 1;
+                let kind = unsupported_alt_kind(alt_bytes);
+                match kind {
+                    "symbolic_or_breakend" => st.skipped_alt_symbolic_or_breakend += 1,
+                    "spanning_deletion" => st.skipped_alt_spanning_deletion += 1,
+                    _ => st.skipped_alt_non_dna += 1,
+                }
+                if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                    let alt_allele = uppercase_ascii_string(alt_bytes);
+                    return Err(format!(
+                        "unsupported selected ALT allele at {chrom}:{pos1} hap={} ALT={alt_allele} kind={kind}",
+                        hap + 1
+                    ));
+                }
                 continue;
             }
             let alt_allele = uppercase_ascii_string(alt_bytes);
             if ref_allele.eq_ignore_ascii_case(&alt_allele) {
                 st.skipped_unsupported_alt += 1;
+                st.skipped_alt_same_as_ref += 1;
+                if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                    return Err(format!(
+                        "unsupported selected ALT allele at {chrom}:{pos1} hap={} ALT equals REF ({alt_allele})",
+                        hap + 1
+                    ));
+                }
                 continue;
+            }
+            if contains_n_base(ref_bytes) || contains_n_base(alt_bytes) {
+                st.observations_with_n += 1;
+                if cfg.warn_on_n {
+                    eprintln!(
+                        "warning: N base in selected allele at {chrom}:{pos1} hap={} REF={} ALT={}",
+                        hap + 1,
+                        ref_allele,
+                        alt_allele
+                    );
+                }
             }
             let is_snv = is_snv_pair(&ref_allele, &alt_allele);
             obs.push(Obs {
@@ -819,18 +948,46 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         return;
     }
     eprintln!(
-        "phase_mnv: sample={} records={} phased_records={} haplotype_variant_observations={} emitted_calls={}",
-        sample, st.records, st.phased_records, st.observations, st.emitted
+        "phase_mnv: input={} reference={} output={} sample={}",
+        cfg.input_path,
+        cfg.fasta_path,
+        output_label(cfg),
+        sample
     );
     eprintln!(
-        "phase_mnv: skipped no_gt={} non_diploid={} missing_gt={} unphased={} unsupported_ref={} unsupported_alt={} ref_hap_alleles={}",
+        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={}",
+        cfg.max_gap,
+        cfg.min_variants,
+        cfg.unsupported_alleles.as_str(),
+        cfg.warn_on_n,
+        cfg.no_ref_check,
+        cfg.no_header
+    );
+    eprintln!(
+        "phase_mnv: records={} phased_records={} haplotype_variant_observations={} emitted_calls={}",
+        st.records, st.phased_records, st.observations, st.emitted
+    );
+    eprintln!(
+        "phase_mnv: skipped no_gt={} non_diploid={} missing_gt={} unphased={} ref_hap_alleles={}",
         st.skipped_no_gt,
         st.skipped_not_diploid,
         st.skipped_missing_gt,
         st.skipped_unphased,
-        st.skipped_ref,
-        st.skipped_unsupported_alt,
         st.skipped_ref_allele
+    );
+    eprintln!(
+        "phase_mnv: unsupported ref_non_dna={} alt_out_of_range={} alt_symbolic_or_breakend={} alt_spanning_deletion={} alt_non_dna={} alt_same_as_ref={} unsupported_alt_total={}",
+        st.skipped_ref,
+        st.skipped_alt_out_of_range,
+        st.skipped_alt_symbolic_or_breakend,
+        st.skipped_alt_spanning_deletion,
+        st.skipped_alt_non_dna,
+        st.skipped_alt_same_as_ref,
+        st.skipped_unsupported_alt
+    );
+    eprintln!(
+        "phase_mnv: multiallelic_records={} observations_with_n={}",
+        st.multiallelic_records, st.observations_with_n
     );
 }
 

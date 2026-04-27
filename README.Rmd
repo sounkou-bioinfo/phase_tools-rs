@@ -291,6 +291,8 @@ tests/fixtures/multiallelic.vcf
 tests/fixtures/multiallelic.expected.body.vcf
 tests/fixtures/symbolic.vcf
 tests/fixtures/symbolic.max1.expected.body.vcf
+tests/fixtures/n_base.vcf
+tests/fixtures/n_base.expected.body.vcf
 tests/fixtures/byte_identity.vcf
 tests/fixtures/ref_mismatch.vcf
 tests/fixtures/truncated.vcf.gz

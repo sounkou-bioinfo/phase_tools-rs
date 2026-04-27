@@ -12,10 +12,13 @@ ref="$tmp/ref.fa"
 
 help="$tmp/help.txt"
 "$bin" --help > "$help"
+grep -q -- "--unsupported-alleles MODE" "$help"
+grep -q -- "--warn-on-n" "$help"
 grep -q "Multi-allelic input sites use the ALT allele selected" "$help"
 grep -q "unselected ALTs are ignored and output" "$help"
 grep -q "Symbolic, breakend, spanning-deletion" "$help"
 grep -q "currently not barriers" "$help"
+grep -q "output=stdout for VCF stdout" "$help"
 
 run_body() {
   local input=$1
@@ -48,5 +51,9 @@ diff -u "$fixtures/multiallelic.expected.body.vcf" "$tmp/multiallelic.body"
 
 run_body "$fixtures/symbolic.vcf" "$tmp/symbolic.body" --max-gap 1
 diff -u "$fixtures/symbolic.max1.expected.body.vcf" "$tmp/symbolic.body"
+
+run_body "$fixtures/n_base.vcf" "$tmp/n_base.body" --warn-on-n 2> "$tmp/n_base.err"
+diff -u "$fixtures/n_base.expected.body.vcf" "$tmp/n_base.body"
+grep -q "warning: N base in selected allele at chr1:2 hap=2 REF=C ALT=N" "$tmp/n_base.err"
 
 echo "phase_mnv tests passed"

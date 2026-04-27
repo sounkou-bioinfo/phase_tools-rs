@@ -40,6 +40,7 @@ Behavior fixtures cover:
 - mixed SNV/indel blocks that become `TYPE=COMPLEX`
 - selected ALT handling at multi-allelic sites
 - symbolic/non-DNA ALT skipping semantics
+- `--warn-on-n` warnings while preserving `N` as plain DNA
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures
@@ -59,6 +60,7 @@ Negative fixtures and generated checks cover:
 - unknown sample
 - invalid negative `--max-gap`
 - REF/FASTA mismatch
+- `--unsupported-alleles fail` on selected unsupported ALT alleles
 - truncated gzipped VCF input
 
 The truncated-input fixture is tracked explicitly:

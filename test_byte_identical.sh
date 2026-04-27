@@ -19,8 +19,8 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-"$c_bin" -r "$REF" -s "$SAMPLE" -o "$tmp/c.vcf" "$VCF" 2> "$tmp/c.log"
-"$rs_bin" -r "$REF" -s "$SAMPLE" -o "$tmp/rs.vcf" "$VCF" 2> "$tmp/rs.log"
+"$c_bin" -r "$REF" -s "$SAMPLE" "$VCF" > "$tmp/c.vcf" 2> "$tmp/c.log"
+"$rs_bin" -r "$REF" -s "$SAMPLE" "$VCF" > "$tmp/rs.vcf" 2> "$tmp/rs.log"
 
 cmp "$tmp/c.vcf" "$tmp/rs.vcf"
 cmp "$tmp/c.log" "$tmp/rs.log"

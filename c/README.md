@@ -51,6 +51,9 @@ Useful options:
 -g, --max-gap N      allow up to N unchanged reference bases between variants
     --min-vars N     minimum source variants per emitted call (default 2)
     --min-snvs N     alias for --min-vars
+    --unsupported-alleles skip|fail
+                      skip selected unsupported alleles, or fail fast
+    --warn-on-n      warn when selected REF/ALT contains N
     --no-ref-check   ignore VCF REF vs FASTA mismatches
     --no-header      emit records only
 -q, --quiet          suppress stderr summary
@@ -77,7 +80,7 @@ Implemented intentionally narrow:
 
 - one selected sample;
 - diploid phased GT only;
-- plain DNA alleles only (`REF` and selected `ALT` contain A/C/G/T/N; symbolic and breakend alleles are skipped);
+- plain DNA alleles only (`REF` and selected `ALT` contain A/C/G/T/N; symbolic, breakend, spanning-deletion, and non-DNA selected alleles are skipped by default or rejected with `--unsupported-alleles fail`);
 - emits plain text VCF (pipe to `bgzip` if compressed output is needed).
 
 This is the reusable MNV-construction slice; no codon or amino-acid annotation is
