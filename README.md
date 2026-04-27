@@ -235,6 +235,10 @@ tests/fixtures/gap.max0.expected.body.vcf
 tests/fixtures/gap.max1.expected.body.vcf
 tests/fixtures/complex.vcf
 tests/fixtures/complex.expected.body.vcf
+tests/fixtures/multiallelic.vcf
+tests/fixtures/multiallelic.expected.body.vcf
+tests/fixtures/symbolic.vcf
+tests/fixtures/symbolic.max1.expected.body.vcf
 tests/fixtures/byte_identity.vcf
 tests/fixtures/ref_mismatch.vcf
 tests/fixtures/truncated.vcf.gz
@@ -334,7 +338,10 @@ projected columns only:
 CHROM POS REF ALT GT
 ```
 
-Detailed validation notes are in [`docs/validation.md`](docs/validation.md).
+Detailed semantics and validation notes are in:
+
+- [`docs/semantics.md`](docs/semantics.md)
+- [`docs/validation.md`](docs/validation.md)
 
 The most relevant upstream tools are:
 

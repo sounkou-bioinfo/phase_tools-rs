@@ -38,6 +38,8 @@ Behavior fixtures cover:
 - adjacent phased SNVs that become `TYPE=MNV`
 - `--max-gap` behavior
 - mixed SNV/indel blocks that become `TYPE=COMPLEX`
+- selected ALT handling at multi-allelic sites
+- symbolic/non-DNA ALT skipping semantics
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures

@@ -36,4 +36,10 @@ diff -u "$fixtures/gap.max1.expected.body.vcf" "$tmp/gap1.body"
 run_body "$fixtures/complex.vcf" "$tmp/complex.body"
 diff -u "$fixtures/complex.expected.body.vcf" "$tmp/complex.body"
 
+run_body "$fixtures/multiallelic.vcf" "$tmp/multiallelic.body"
+diff -u "$fixtures/multiallelic.expected.body.vcf" "$tmp/multiallelic.body"
+
+run_body "$fixtures/symbolic.vcf" "$tmp/symbolic.body" --max-gap 1
+diff -u "$fixtures/symbolic.max1.expected.body.vcf" "$tmp/symbolic.body"
+
 echo "phase_mnv tests passed"
