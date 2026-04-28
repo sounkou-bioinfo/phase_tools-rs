@@ -166,6 +166,20 @@ make install          # normal release
 make install-static   # static release on Linux, bundled-htslib release elsewhere
 ```
 
+## Output formats and threads
+
+The Rust binary infers output format from `-o/--output`:
+
+```text
+-o out.vcf      plain VCF
+-o out.vcf.gz   BGZF-compressed VCF
+-o out.vcf.bgz  BGZF-compressed VCF
+-o out.bcf      BCF
+```
+
+Use `--threads N` (or `-@ N`) to enable htslib/BGZF worker threads for compressed
+input and compressed output. Stdout remains plain VCF by default.
+
 ## C implementation
 
 Build against system htslib:
@@ -476,6 +490,8 @@ The most relevant upstream tools are:
 - `vt normalize` — normalization reference for left-aligned + parsimonious
   representation.
 - `bcftools norm` — useful validator for emitted normalized records.
+- `Illumina Nirvana` — codon/transcript-aware SNV-only MNV recomposition
+  reference for future benchmarking of annotation-driven recomposition rules.
 
 ## CI
 

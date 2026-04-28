@@ -64,6 +64,20 @@ make install          # normal release
 make install-static   # static release on Linux, bundled-htslib release elsewhere
 ```
 
+## Output formats and threads
+
+The Rust binary infers output format from `-o/--output`:
+
+```text
+-o out.vcf      plain VCF
+-o out.vcf.gz   BGZF-compressed VCF
+-o out.vcf.bgz  BGZF-compressed VCF
+-o out.bcf      BCF
+```
+
+Use `--threads N` (or `-@ N`) to enable htslib/BGZF worker threads for compressed
+input and compressed output. Stdout remains plain VCF by default.
+
 ## C implementation
 
 Build against system htslib:
@@ -99,7 +113,11 @@ required:
 
 options:
   -s, --sample NAME      Sample to read (default: first sample)
-  -o, --output FILE      Output VCF path (default: stdout; plain text)
+  -o, --output FILE      Output path (default: stdout). Format is inferred:
+                        .vcf = plain VCF, .vcf.gz/.vcf.bgz = BGZF VCF,
+                        .bcf = BCF; stdout defaults to plain VCF
+  -@, --threads N        Extra htslib/BGZF threads for decompression and
+                        compressed output (default: 1)
   -g, --max-gap N        Allow up to N unchanged reference bases between
                         phased variants when building one merged call (default: 0)
       --min-vars N       Minimum source variants per emitted call (default: 2)
@@ -137,6 +155,8 @@ Notes:
   * With the default --max-gap 0, only adjacent phased variants are
     merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are
     TYPE=COMPLEX.
+  * Output format is inferred from -o/--output. BCF output always includes
+    a VCF/BCF header even if --no-header is set.
   * Unless --quiet is set, summary stats go to stderr and include
     input/reference/output (output=stdout for VCF stdout), settings,
     skip counts, unsupported categories, and N counts.
@@ -460,6 +480,8 @@ The most relevant upstream tools are:
 - `vt normalize` — normalization reference for left-aligned + parsimonious
   representation.
 - `bcftools norm` — useful validator for emitted normalized records.
+- `Illumina Nirvana` — codon/transcript-aware SNV-only MNV recomposition
+  reference for future benchmarking of annotation-driven recomposition rules.
 
 ## CI
 

@@ -23,3 +23,4 @@ clone_or_update https://github.com/vcflib/vcflib.git vcflib
 clone_or_update https://github.com/whatshap/whatshap.git whatshap
 clone_or_update https://github.com/atks/vt.git vt
 clone_or_update https://github.com/samtools/bcftools.git bcftools
+clone_or_update https://github.com/Illumina/Nirvana.git Nirvana

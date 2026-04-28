@@ -45,6 +45,9 @@ Behavior fixtures cover:
   while dropping phase-specific FORMAT tags by default
 - experimental Rust `--phase-from-bam` read-backed phasing on a tiny tracked
   BAM/BAI fixture before MNV construction
+- Rust output format inference for plain VCF, BGZF-compressed VCF, and BCF,
+  including `--threads` plumbing for compressed input/output checks when
+  `bcftools` is available
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures
@@ -123,6 +126,22 @@ VCFLIB_ENV=my-env make compare-vcflib
 VCFLIB_SPEC='vcflib=1.0.15' make compare-vcflib
 VCFGENO2HAPLO_BIN=/path/to/vcfgeno2haplo make compare-vcflib
 ```
+
+## Nirvana recomposition benchmark target
+
+Illumina Nirvana's MNV recomposition is a better benchmark than generic
+haplotype-comparison output when the target is codon/transcript-aware SNV
+recomposition. The reference clone helper includes Nirvana, but the repository
+is not vendored:
+
+```bash
+./scripts/clone_reference_impls.sh
+```
+
+The intended benchmark scope is narrower than current `phase_mnv_rs` merging:
+SNV-only recomposition where two or more SNVs affect the same codon in at least
+one transcript, with Nirvana-like phase-set and homozygous-variant semantics.
+Indel/complex recomposition remains a separate policy decision.
 
 ## Normalization references
 

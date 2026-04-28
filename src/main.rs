@@ -30,6 +30,23 @@ impl UnsupportedAllelesPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputKind {
+    PlainVcf,
+    BgzfVcf,
+    Bcf,
+}
+
+impl OutputKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            OutputKind::PlainVcf => "vcf",
+            OutputKind::BgzfVcf => "vcf.gz",
+            OutputKind::Bcf => "bcf",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Config {
     input_path: String,
@@ -39,6 +56,7 @@ struct Config {
     phase_bam_path: Option<String>,
     phase_min_mapq: u8,
     phase_min_baseq: u8,
+    threads: usize,
     max_gap: i64,
     min_variants: usize,
     unsupported_alleles: UnsupportedAllelesPolicy,
@@ -190,6 +208,54 @@ impl Drop for Faidx {
     }
 }
 
+struct BgzfWriter(*mut htslib::BGZF);
+
+impl BgzfWriter {
+    fn from_path(path: &str, threads: usize) -> Result<Self, String> {
+        let c_path = CString::new(path.as_bytes())
+            .map_err(|_| format!("output path contains NUL byte: {path}"))?;
+        let mode = CString::new("w").expect("literal contains no NUL");
+        let fp = unsafe { htslib::bgzf_open(c_path.as_ptr(), mode.as_ptr()) };
+        if fp.is_null() {
+            return Err(format!("cannot open BGZF output '{path}'"));
+        }
+        if threads > 1 && unsafe { htslib::bgzf_mt(fp, threads as i32, 256) } != 0 {
+            unsafe { htslib::bgzf_close(fp) };
+            return Err(format!("failed to enable BGZF output threads for '{path}'"));
+        }
+        Ok(Self(fp))
+    }
+}
+
+impl Write for BgzfWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n =
+            unsafe { htslib::bgzf_write(self.0, buf.as_ptr() as *const c_void, buf.len() as _) };
+        if n < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "BGZF write failed"))
+        } else {
+            Ok(n as usize)
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let ret = unsafe { htslib::bgzf_flush(self.0) };
+        if ret != 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "BGZF flush failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for BgzfWriter {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { htslib::bgzf_close(self.0) };
+        }
+    }
+}
+
 fn die(msg: &str) -> ! {
     eprintln!("error: {msg}");
     std::process::exit(1);
@@ -208,7 +274,11 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "\n",
             "options:\n",
             "  -s, --sample NAME      Sample to read (default: first sample)\n",
-            "  -o, --output FILE      Output VCF path (default: stdout; plain text)\n",
+            "  -o, --output FILE      Output path (default: stdout). Format is inferred:\n",
+            "                        .vcf = plain VCF, .vcf.gz/.vcf.bgz = BGZF VCF,\n",
+            "                        .bcf = BCF; stdout defaults to plain VCF\n",
+            "  -@, --threads N        Extra htslib/BGZF threads for decompression and\n",
+            "                        compressed output (default: 1)\n",
             "  -g, --max-gap N        Allow up to N unchanged reference bases between\n",
             "                        phased variants when building one merged call (default: 0)\n",
             "      --min-vars N       Minimum source variants per emitted call (default: 2)\n",
@@ -246,6 +316,8 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "  * With the default --max-gap 0, only adjacent phased variants are\n",
             "    merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are\n",
             "    TYPE=COMPLEX.\n",
+            "  * Output format is inferred from -o/--output. BCF output always includes\n",
+            "    a VCF/BCF header even if --no-header is set.\n",
             "  * Unless --quiet is set, summary stats go to stderr and include\n",
             "    input/reference/output (output=stdout for VCF stdout), settings,\n",
             "    skip counts, unsupported categories, and N counts.\n"
@@ -279,6 +351,7 @@ fn parse_args() -> Config {
     let mut phase_bam_path: Option<String> = None;
     let mut phase_min_mapq = 20u8;
     let mut phase_min_baseq = 13u8;
+    let mut threads = 1usize;
     let mut max_gap = 0i64;
     let mut min_variants = 2usize;
     let mut unsupported_alleles = UnsupportedAllelesPolicy::Skip;
@@ -323,6 +396,17 @@ fn parse_args() -> Config {
                     die("--max-gap requires an argument");
                 }
                 max_gap = parse_i64(&args[i], "--max-gap");
+            }
+            "-@" | "--threads" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--threads requires an argument");
+                }
+                let value = parse_i64(&args[i], "--threads");
+                if value < 1 {
+                    die("--threads must be >= 1");
+                }
+                threads = value as usize;
             }
             "--min-vars" | "--min-snvs" => {
                 i += 1;
@@ -407,6 +491,7 @@ fn parse_args() -> Config {
         phase_bam_path,
         phase_min_mapq,
         phase_min_baseq,
+        threads,
         max_gap,
         min_variants,
         unsupported_alleles,
@@ -452,6 +537,22 @@ fn output_label(cfg: &Config) -> &str {
     match cfg.output_path.as_deref() {
         None | Some("-") => "stdout",
         Some(path) => path,
+    }
+}
+
+fn infer_output_kind(cfg: &Config) -> OutputKind {
+    match cfg.output_path.as_deref() {
+        None | Some("-") => OutputKind::PlainVcf,
+        Some(path) => {
+            let lower = path.to_ascii_lowercase();
+            if lower.ends_with(".bcf") {
+                OutputKind::Bcf
+            } else if lower.ends_with(".vcf.gz") || lower.ends_with(".vcf.bgz") {
+                OutputKind::BgzfVcf
+            } else {
+                OutputKind::PlainVcf
+            }
+        }
     }
 }
 
@@ -680,6 +781,10 @@ fn phase_candidates_from_bam(
 
     let mut bam = bam::IndexedReader::from_path(bam_path)
         .map_err(|e| format!("cannot open indexed BAM/CRAM '{bam_path}': {e}"))?;
+    if cfg.threads > 1 {
+        bam.set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable BAM/CRAM threads for '{bam_path}': {e}"))?;
+    }
 
     let mut by_chrom: HashMap<&str, Vec<usize>> = HashMap::new();
     for (idx, candidate) in candidates.iter().enumerate() {
@@ -904,6 +1009,11 @@ fn read_observations_with_bam_phasing(
     preflight_vcf_header(&cfg.input_path)?;
     let mut reader = bcf::Reader::from_path(&cfg.input_path)
         .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    if cfg.threads > 1 {
+        reader
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
+    }
     let sample_count = reader.header().sample_count();
     if sample_count == 0 {
         return Err("input has no samples; phased GT is required".to_string());
@@ -1087,6 +1197,11 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
     preflight_vcf_header(&cfg.input_path)?;
     let mut reader = bcf::Reader::from_path(&cfg.input_path)
         .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    if cfg.threads > 1 {
+        reader
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
+    }
     let sample_count = reader.header().sample_count();
     if sample_count == 0 {
         return Err("input has no samples; phased GT is required".to_string());
@@ -1543,6 +1658,39 @@ fn haps_for_mask(mask: i32) -> &'static str {
     }
 }
 
+fn push_output_header_records(h: &mut bcf::Header, cfg: &Config, header: &HeaderInfo) {
+    h.push_record(b"##fileformat=VCFv4.3");
+    h.push_record(b"##source=phase_mnv");
+    h.push_record(b"##FILTER=<ID=PASS,Description=\"All filters passed\">");
+    h.push_record(b"##phase_mnv_normalization=Tan2015_left_aligned_parsimonious");
+    h.push_record(b"##phase_mnv_normalization_citation=Tan_A_Abecasis_GR_Kang_HM_Bioinformatics_2015_31_13_2202_2204_doi_10.1093/bioinformatics/btv112");
+    h.push_record(format!("##phase_mnv_input={}", cfg.input_path).as_bytes());
+    if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
+        h.push_record(format!("##phase_mnv_phase_from_bam={bam_path}").as_bytes());
+        h.push_record(b"##phase_mnv_phase_model=experimental_read_linkage_greedy_parity");
+    }
+    h.push_record(format!("##reference={}", cfg.fasta_path).as_bytes());
+    h.push_record(b"##INFO=<ID=TYPE,Number=1,Type=String,Description=\"Merged call type: MNV for pure SNV blocks, COMPLEX when indels are included\">");
+    h.push_record(b"##INFO=<ID=NVAR,Number=1,Type=Integer,Description=\"Number of phased source variants merged into this call\">");
+    h.push_record(b"##INFO=<ID=NSNPS,Number=1,Type=Integer,Description=\"Number of source SNVs in this merged call\">");
+    h.push_record(b"##INFO=<ID=END,Number=1,Type=Integer,Description=\"End coordinate of merged reference span\">");
+    h.push_record(b"##INFO=<ID=SOURCE_POS,Number=.,Type=Integer,Description=\"Original source variant positions merged into this call\">");
+    h.push_record(b"##INFO=<ID=HAPS,Number=.,Type=Integer,Description=\"One-based phased haplotypes carrying this merged call\">");
+    h.push_record(b"##INFO=<ID=PS,Number=1,Type=Integer,Description=\"Phase set shared by merged variants, when present in input FORMAT/PS\">");
+    h.push_record(b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Phased genotype for the constructed call in the selected sample\">");
+    h.push_record(b"##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase set for the constructed call, or missing if absent/ambiguous\">");
+    for contig in &header.contigs {
+        h.push_record(format!("##contig=<ID={contig}>").as_bytes());
+    }
+    h.push_sample(header.sample.as_bytes());
+}
+
+fn make_bcf_header(cfg: &Config, header: &HeaderInfo) -> bcf::Header {
+    let mut h = bcf::Header::new();
+    push_output_header_records(&mut h, cfg, header);
+    h
+}
+
 fn write_header<W: Write>(out: &mut W, cfg: &Config, header: &HeaderInfo) -> io::Result<()> {
     writeln!(out, "##fileformat=VCFv4.3")?;
     writeln!(out, "##source=phase_mnv")?;
@@ -1622,6 +1770,97 @@ fn write_calls<W: Write>(
     Ok(())
 }
 
+fn parse_int_list(s: &str) -> Result<Vec<i32>, String> {
+    if s.is_empty() || s == "." {
+        return Ok(Vec::new());
+    }
+    s.split(',')
+        .map(|x| {
+            x.parse::<i32>()
+                .map_err(|_| format!("internal error: invalid integer list value '{x}'"))
+        })
+        .collect()
+}
+
+fn missing_bcf_float() -> f32 {
+    f32::from_bits(0x7F80_0001)
+}
+
+fn genotype_for_mask(mask: i32) -> [GenotypeAllele; 2] {
+    match mask & 3 {
+        1 => [GenotypeAllele::Unphased(1), GenotypeAllele::Phased(0)],
+        2 => [GenotypeAllele::Unphased(0), GenotypeAllele::Phased(1)],
+        3 => [GenotypeAllele::Unphased(1), GenotypeAllele::Phased(1)],
+        _ => [
+            GenotypeAllele::UnphasedMissing,
+            GenotypeAllele::PhasedMissing,
+        ],
+    }
+}
+
+fn write_calls_bcf(
+    writer: &mut bcf::Writer,
+    calls: &[MnvCall],
+    st: &mut Stats,
+) -> Result<(), String> {
+    for c in calls {
+        let mut record = writer.empty_record();
+        record.set_rid(Some(c.rid as u32));
+        record.set_pos(c.start - 1);
+        record
+            .set_id(b".")
+            .map_err(|e| format!("failed to set BCF ID: {e}"))?;
+        record.set_qual(missing_bcf_float());
+        record
+            .push_filter(&b"PASS"[..])
+            .map_err(|e| format!("failed to set BCF FILTER: {e}"))?;
+        record
+            .set_alleles(&[c.ref_seq.as_bytes(), c.alt_seq.as_bytes()])
+            .map_err(|e| format!("failed to set BCF alleles: {e}"))?;
+        record
+            .push_info_string(b"TYPE", &[c.call_type.as_bytes()])
+            .map_err(|e| format!("failed to set INFO/TYPE: {e}"))?;
+        record
+            .push_info_integer(b"NVAR", &[c.nvars as i32])
+            .map_err(|e| format!("failed to set INFO/NVAR: {e}"))?;
+        record
+            .push_info_integer(b"NSNPS", &[c.nsnps as i32])
+            .map_err(|e| format!("failed to set INFO/NSNPS: {e}"))?;
+        record
+            .push_info_integer(b"END", &[c.end as i32])
+            .map_err(|e| format!("failed to set INFO/END: {e}"))?;
+        let source_pos = parse_int_list(&c.positions)?;
+        record
+            .push_info_integer(b"SOURCE_POS", &source_pos)
+            .map_err(|e| format!("failed to set INFO/SOURCE_POS: {e}"))?;
+        let haps = parse_int_list(haps_for_mask(c.hap_mask))?;
+        record
+            .push_info_integer(b"HAPS", &haps)
+            .map_err(|e| format!("failed to set INFO/HAPS: {e}"))?;
+        if c.ps != PS_MISSING {
+            record
+                .push_info_integer(b"PS", &[c.ps as i32])
+                .map_err(|e| format!("failed to set INFO/PS: {e}"))?;
+        }
+        record
+            .push_genotypes(&genotype_for_mask(c.hap_mask))
+            .map_err(|e| format!("failed to set FORMAT/GT: {e}"))?;
+        let ps_value = if c.ps == PS_MISSING {
+            BCF_INT32_MISSING
+        } else {
+            c.ps as i32
+        };
+        record
+            .push_format_integer(b"PS", &[ps_value])
+            .map_err(|e| format!("failed to set FORMAT/PS: {e}"))?;
+        writer
+            .write(&record)
+            .map_err(|e| format!("failed to write BCF record: {e}"))?;
+        st.emitted += 1;
+    }
+    Ok(())
+}
+
 fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
     if cfg.quiet {
         return;
@@ -1634,13 +1873,15 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         sample
     );
     eprintln!(
-        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={}",
+        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={} output_format={} threads={}",
         cfg.max_gap,
         cfg.min_variants,
         cfg.unsupported_alleles.as_str(),
         cfg.warn_on_n,
         cfg.no_ref_check,
-        cfg.no_header
+        cfg.no_header,
+        infer_output_kind(cfg).as_str(),
+        cfg.threads
     );
     if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
         eprintln!(
@@ -1702,8 +1943,8 @@ fn run() -> Result<(), String> {
     let mut calls = build_calls(&cfg, &header, fai.0, &mut obs)?;
     merge_duplicate_calls(&mut calls);
 
-    match cfg.output_path.as_deref() {
-        None | Some("-") => {
+    match (cfg.output_path.as_deref(), infer_output_kind(&cfg)) {
+        (None | Some("-"), OutputKind::PlainVcf) => {
             let stdout = io::stdout();
             let mut out = BufWriter::new(stdout.lock());
             if !cfg.no_header {
@@ -1712,7 +1953,7 @@ fn run() -> Result<(), String> {
             write_calls(&mut out, &header, &calls, &mut st).map_err(|e| e.to_string())?;
             out.flush().map_err(|e| e.to_string())?;
         }
-        Some(path) => {
+        (Some(path), OutputKind::PlainVcf) => {
             let file = File::create(Path::new(path))
                 .map_err(|e| format!("cannot open output '{}': {}", path, e))?;
             let mut out = BufWriter::new(file);
@@ -1721,6 +1962,31 @@ fn run() -> Result<(), String> {
             }
             write_calls(&mut out, &header, &calls, &mut st).map_err(|e| e.to_string())?;
             out.flush().map_err(|e| e.to_string())?;
+        }
+        (Some(path), OutputKind::BgzfVcf) => {
+            let mut out = BgzfWriter::from_path(path, cfg.threads)?;
+            if !cfg.no_header {
+                write_header(&mut out, &cfg, &header).map_err(|e| e.to_string())?;
+            }
+            write_calls(&mut out, &header, &calls, &mut st).map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+        }
+        (Some(path), OutputKind::Bcf) => {
+            let bcf_header = make_bcf_header(&cfg, &header);
+            let mut writer = bcf::Writer::from_path(path, &bcf_header, false, bcf::Format::Bcf)
+                .map_err(|e| format!("cannot open BCF output '{}': {}", path, e))?;
+            if cfg.threads > 1 {
+                writer
+                    .set_threads(cfg.threads)
+                    .map_err(|e| format!("failed to enable BCF output threads: {e}"))?;
+            }
+            write_calls_bcf(&mut writer, &calls, &mut st)?;
+        }
+        (None, OutputKind::BgzfVcf | OutputKind::Bcf) => {
+            return Err(
+                "compressed VCF/BCF output to stdout requires explicit support; use -o FILE"
+                    .to_string(),
+            );
         }
     }
 
