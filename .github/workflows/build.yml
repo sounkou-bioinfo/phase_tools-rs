@@ -72,6 +72,7 @@ jobs:
         run: |
           ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_output_formats.sh "${{ steps.rust-bin.outputs.path }}"
+          ./tests/test_all_sites.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_bam_phase.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
 

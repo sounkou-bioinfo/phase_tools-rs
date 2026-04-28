@@ -48,6 +48,9 @@ Behavior fixtures cover:
 - Rust output format inference for plain VCF, BGZF-compressed VCF, and BCF,
   including `--threads` plumbing for compressed input/output checks when
   `bcftools` is available
+- Rust `--emit all-sites` header preservation: the original VCF header is kept
+  and `phase_mnv` metadata is appended while BAM-backed `GT:PS` updates are
+  applied to all input records in the tiny tracked fixture
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures

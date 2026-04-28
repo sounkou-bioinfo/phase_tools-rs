@@ -55,6 +55,9 @@ FORMAT values. It is a preparation step for external phasing comparisons.
 
 ## Output model
 
+The default `--emit mnv` mode writes only derived biallelic merged haplotype
+records, not the whole input VCF/BCF.
+
 - Output records are biallelic merged haplotype records.
 - Pure source-SNV blocks emit `TYPE=MNV`.
 - Blocks containing any selected indel or non-SNV plain-DNA allele emit
@@ -71,6 +74,12 @@ FORMAT values. It is a preparation step for external phasing comparisons.
   merged into one output line with `GT=1|1` and `HAPS=1,2`.
 - If haplotypes produce different ALT haplotypes over the same region, they are
   emitted as separate biallelic records, one per ALT haplotype.
+
+The Rust-only `--emit all-sites` mode instead preserves every input VCF/BCF
+record and keeps the original input header by duplicating it through htslib, then
+appending `phase_mnv` metadata/header records. With `--phase-from-bam` it updates
+`FORMAT/GT` and `FORMAT/PS` for phased one-sample inputs; it does not construct
+MNV/COMPLEX records in that mode.
 
 ## Multi-allelic input sites
 
@@ -182,7 +191,7 @@ explicit output destination:
 
 ```text
 phase_mnv: input=... reference=... output=stdout sample=...
-phase_mnv: settings max_gap=... min_vars=... unsupported_alleles=... warn_on_n=... no_ref_check=... no_header=... output_format=... threads=...
+phase_mnv: settings max_gap=... min_vars=... unsupported_alleles=... warn_on_n=... no_ref_check=... no_header=... output_format=... threads=... emit=...
 phase_mnv: records=... phased_records=... haplotype_variant_observations=... emitted_calls=...
 phase_mnv: skipped no_gt=... non_diploid=... missing_gt=... unphased=... ref_hap_alleles=...
 phase_mnv: unsupported ref_non_dna=... alt_out_of_range=... alt_symbolic_or_breakend=... alt_spanning_deletion=... alt_non_dna=... alt_same_as_ref=... unsupported_alt_total=...

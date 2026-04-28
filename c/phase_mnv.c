@@ -937,7 +937,7 @@ static void print_summary(const Config *cfg, const Stats *st, const char *sample
             "phase_mnv: input=%s reference=%s output=%s sample=%s\n",
             cfg->input_path, cfg->fasta_path, output_label(cfg), sample);
     fprintf(stderr,
-            "phase_mnv: settings max_gap=%" PRId64 " min_vars=%d unsupported_alleles=%s warn_on_n=%s no_ref_check=%s no_header=%s output_format=vcf threads=1\n",
+            "phase_mnv: settings max_gap=%" PRId64 " min_vars=%d unsupported_alleles=%s warn_on_n=%s no_ref_check=%s no_header=%s output_format=vcf threads=1 emit=mnv\n",
             cfg->max_gap, cfg->min_variants, unsupported_policy_name(cfg->unsupported_alleles),
             cfg->warn_on_n ? "true" : "false",
             cfg->no_ref_check ? "true" : "false",

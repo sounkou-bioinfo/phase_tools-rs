@@ -1,6 +1,7 @@
 use libc::c_void;
 use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::{self, Read as BamRead};
+use rust_htslib::bcf::header::HeaderView;
 use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::htslib;
@@ -37,6 +38,21 @@ enum OutputKind {
     Bcf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmitMode {
+    Mnv,
+    AllSites,
+}
+
+impl EmitMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            EmitMode::Mnv => "mnv",
+            EmitMode::AllSites => "all-sites",
+        }
+    }
+}
+
 impl OutputKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -57,6 +73,7 @@ struct Config {
     phase_min_mapq: u8,
     phase_min_baseq: u8,
     threads: usize,
+    emit_mode: EmitMode,
     max_gap: i64,
     min_variants: usize,
     unsupported_alleles: UnsupportedAllelesPolicy,
@@ -279,6 +296,9 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "                        .bcf = BCF; stdout defaults to plain VCF\n",
             "  -@, --threads N        Extra htslib/BGZF threads for decompression and\n",
             "                        compressed output (default: 1)\n",
+            "      --emit MODE        Output mode: mnv (default) or all-sites. all-sites\n",
+            "                        is Rust-only, preserves input records/header, and\n",
+            "                        updates GT/PS when used with --phase-from-bam\n",
             "  -g, --max-gap N        Allow up to N unchanged reference bases between\n",
             "                        phased variants when building one merged call (default: 0)\n",
             "      --min-vars N       Minimum source variants per emitted call (default: 2)\n",
@@ -318,6 +338,8 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "    TYPE=COMPLEX.\n",
             "  * Output format is inferred from -o/--output. BCF output always includes\n",
             "    a VCF/BCF header even if --no-header is set.\n",
+            "  * --emit all-sites keeps the original VCF/BCF header via htslib and\n",
+            "    appends phase_mnv metadata instead of replacing it.\n",
             "  * Unless --quiet is set, summary stats go to stderr and include\n",
             "    input/reference/output (output=stdout for VCF stdout), settings,\n",
             "    skip counts, unsupported categories, and N counts.\n"
@@ -343,6 +365,14 @@ fn parse_unsupported_alleles_policy(s: &str) -> UnsupportedAllelesPolicy {
     }
 }
 
+fn parse_emit_mode(s: &str) -> EmitMode {
+    match s {
+        "mnv" => EmitMode::Mnv,
+        "all-sites" | "all" | "phased-vcf" => EmitMode::AllSites,
+        _ => die("--emit must be one of: mnv, all-sites"),
+    }
+}
+
 fn parse_args() -> Config {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut fasta_path: Option<String> = None;
@@ -352,6 +382,7 @@ fn parse_args() -> Config {
     let mut phase_min_mapq = 20u8;
     let mut phase_min_baseq = 13u8;
     let mut threads = 1usize;
+    let mut emit_mode = EmitMode::Mnv;
     let mut max_gap = 0i64;
     let mut min_variants = 2usize;
     let mut unsupported_alleles = UnsupportedAllelesPolicy::Skip;
@@ -407,6 +438,13 @@ fn parse_args() -> Config {
                     die("--threads must be >= 1");
                 }
                 threads = value as usize;
+            }
+            "--emit" | "--emit-mode" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--emit requires an argument");
+                }
+                emit_mode = parse_emit_mode(&args[i]);
             }
             "--min-vars" | "--min-snvs" => {
                 i += 1;
@@ -492,6 +530,7 @@ fn parse_args() -> Config {
         phase_min_mapq,
         phase_min_baseq,
         threads,
+        emit_mode,
         max_gap,
         min_variants,
         unsupported_alleles,
@@ -911,6 +950,121 @@ fn phase_candidates_from_bam(
     st.bam_phase_unphased_variants = candidates.len().saturating_sub(assignments.len()) as u64;
     st.skipped_unphased += st.bam_phase_unphased_variants;
     Ok(assignments)
+}
+
+fn candidate_from_record(
+    record: &bcf::Record,
+    header_info: &HeaderInfo,
+    sample_idx: usize,
+    st: &mut Stats,
+    cfg: &Config,
+) -> Result<Option<PhaseCandidate>, String> {
+    if record.alleles().len() > 2 {
+        st.multiallelic_records += 1;
+    }
+    let genotypes = match record.genotypes() {
+        Ok(g) => g,
+        Err(_) => {
+            st.skipped_no_gt += 1;
+            return Ok(None);
+        }
+    };
+    let gt = genotypes.get(sample_idx);
+    if gt.len() != 2 {
+        st.skipped_not_diploid += 1;
+        return Ok(None);
+    }
+    let Some(a0) = allele_index(gt[0]) else {
+        st.skipped_missing_gt += 1;
+        return Ok(None);
+    };
+    let Some(a1) = allele_index(gt[1]) else {
+        st.skipped_missing_gt += 1;
+        return Ok(None);
+    };
+
+    let alleles_raw = record.alleles();
+    if alleles_raw.is_empty() {
+        st.skipped_ref += 1;
+        if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+            return Err("unsupported empty REF allele".to_string());
+        }
+        return Ok(None);
+    }
+
+    let pos1 = record.pos() + 1;
+    let rid = record.rid().unwrap_or(0) as usize;
+    let chrom = header_info
+        .rid_names
+        .get(rid)
+        .map(String::as_str)
+        .unwrap_or(".");
+    if !is_plain_dna_allele(alleles_raw[0]) {
+        st.skipped_ref += 1;
+        if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+            let ref_allele = uppercase_ascii_string(alleles_raw[0]);
+            return Err(format!(
+                "unsupported REF allele at {chrom}:{pos1} REF={ref_allele}"
+            ));
+        }
+        return Ok(None);
+    }
+
+    for allele in [a0, a1] {
+        if allele < 0 || allele as usize >= alleles_raw.len() {
+            st.skipped_unsupported_alt += 1;
+            st.skipped_alt_out_of_range += 1;
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                return Err(format!(
+                    "unsupported selected allele index at {chrom}:{pos1} allele={allele}"
+                ));
+            }
+            return Ok(None);
+        }
+        if allele != 0 && !is_plain_dna_allele(alleles_raw[allele as usize]) {
+            st.skipped_unsupported_alt += 1;
+            let kind = unsupported_alt_kind(alleles_raw[allele as usize]);
+            match kind {
+                "symbolic_or_breakend" => st.skipped_alt_symbolic_or_breakend += 1,
+                "spanning_deletion" => st.skipped_alt_spanning_deletion += 1,
+                _ => st.skipped_alt_non_dna += 1,
+            }
+            if cfg.unsupported_alleles == UnsupportedAllelesPolicy::Fail {
+                let alt_allele = uppercase_ascii_string(alleles_raw[allele as usize]);
+                return Err(format!(
+                    "unsupported selected allele at {chrom}:{pos1} ALT={alt_allele} kind={kind}"
+                ));
+            }
+            return Ok(None);
+        }
+    }
+
+    if a0 == a1 {
+        st.skipped_unphased += 1;
+        return Ok(None);
+    }
+    if !is_plain_dna_allele(alleles_raw[a0 as usize])
+        || !is_plain_dna_allele(alleles_raw[a1 as usize])
+    {
+        return Ok(None);
+    }
+
+    let alleles = alleles_raw
+        .iter()
+        .map(|a| uppercase_ascii_string(a))
+        .collect::<Vec<_>>();
+    let ref_len = alleles[0].len() as i64;
+    let is_snv = alleles[a0 as usize].len() == 1 && alleles[a1 as usize].len() == 1;
+    Ok(Some(PhaseCandidate {
+        rid: record.rid().unwrap_or(0) as i32,
+        chrom: chrom.to_string(),
+        pos: pos1,
+        end: pos1 + ref_len - 1,
+        alleles,
+        gt_alleles: [a0, a1],
+        input_order_alleles: [a0, a1],
+        is_snv,
+    }))
 }
 
 fn add_observation_for_candidate(
@@ -1861,6 +2015,203 @@ fn write_calls_bcf(
     Ok(())
 }
 
+fn push_all_sites_header_records(h: &mut bcf::Header, cfg: &Config, input_header: &HeaderView) {
+    h.push_record(b"##phase_mnv_emit_mode=all-sites");
+    h.push_record(b"##phase_mnv_header_policy=preserve_input_header_and_append_phase_mnv_records");
+    h.push_record(format!("##phase_mnv_input={}", cfg.input_path).as_bytes());
+    h.push_record(format!("##phase_mnv_reference={}", cfg.fasta_path).as_bytes());
+    if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
+        h.push_record(format!("##phase_mnv_phase_from_bam={bam_path}").as_bytes());
+        h.push_record(b"##phase_mnv_phase_model=experimental_read_linkage_greedy_parity");
+    }
+    if input_header.format_type(b"PS").is_err() {
+        h.push_record(b"##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase set assigned by phase_mnv_rs\">");
+    }
+}
+
+fn make_all_sites_header(cfg: &Config, input_header: &HeaderView) -> bcf::Header {
+    let mut h = bcf::Header::from_template(input_header);
+    push_all_sites_header_records(&mut h, cfg, input_header);
+    h
+}
+
+fn open_htslib_writer(cfg: &Config, header: &bcf::Header) -> Result<bcf::Writer, String> {
+    let mut writer = match (cfg.output_path.as_deref(), infer_output_kind(cfg)) {
+        (None | Some("-"), OutputKind::PlainVcf) => {
+            bcf::Writer::from_stdout(header, true, bcf::Format::Vcf)
+                .map_err(|e| format!("cannot open VCF stdout: {e}"))?
+        }
+        (Some(path), OutputKind::PlainVcf) => {
+            bcf::Writer::from_path(path, header, true, bcf::Format::Vcf)
+                .map_err(|e| format!("cannot open VCF output '{}': {}", path, e))?
+        }
+        (Some(path), OutputKind::BgzfVcf) => {
+            bcf::Writer::from_path(path, header, false, bcf::Format::Vcf)
+                .map_err(|e| format!("cannot open BGZF VCF output '{}': {}", path, e))?
+        }
+        (Some(path), OutputKind::Bcf) => {
+            bcf::Writer::from_path(path, header, false, bcf::Format::Bcf)
+                .map_err(|e| format!("cannot open BCF output '{}': {}", path, e))?
+        }
+        (None, OutputKind::BgzfVcf | OutputKind::Bcf) => {
+            return Err(
+                "compressed VCF/BCF output to stdout requires explicit support; use -o FILE"
+                    .to_string(),
+            );
+        }
+    };
+    if cfg.threads > 1 {
+        writer
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF output threads: {e}"))?;
+    }
+    Ok(writer)
+}
+
+fn update_record_phase(
+    record: &mut bcf::Record,
+    candidate: &PhaseCandidate,
+    assignment: PhaseAssignment,
+) -> Result<(), String> {
+    let hap_alleles = if assignment.rel == 0 {
+        candidate.gt_alleles
+    } else {
+        [candidate.gt_alleles[1], candidate.gt_alleles[0]]
+    };
+    let gt = [
+        GenotypeAllele::Unphased(hap_alleles[0]),
+        GenotypeAllele::Phased(hap_alleles[1]),
+    ];
+    record
+        .push_genotypes(&gt)
+        .map_err(|e| format!("failed to update FORMAT/GT: {e}"))?;
+    record
+        .push_format_integer(b"PS", &[assignment.ps as i32])
+        .map_err(|e| format!("failed to update FORMAT/PS: {e}"))?;
+    Ok(())
+}
+
+fn run_all_sites(cfg: &Config) -> Result<(), String> {
+    if cfg.no_header {
+        return Err(
+            "--emit all-sites preserves the original VCF/BCF header; --no-header is not supported"
+                .to_string(),
+        );
+    }
+    preflight_vcf_header(&cfg.input_path)?;
+
+    let mut planning_reader = bcf::Reader::from_path(&cfg.input_path)
+        .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    if cfg.threads > 1 {
+        planning_reader
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
+    }
+    let sample_count = planning_reader.header().sample_count();
+    let sample_idx = match cfg.sample_name.as_deref() {
+        None => 0usize,
+        Some(name) => planning_reader
+            .header()
+            .sample_id(name.as_bytes())
+            .ok_or_else(|| {
+                let available = planning_reader
+                    .header()
+                    .samples()
+                    .iter()
+                    .map(|s| String::from_utf8_lossy(s).into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("sample '{name}' not found. Available samples: {available}")
+            })?,
+    };
+    let sample_label = if sample_count == 0 {
+        ".".to_string()
+    } else {
+        String::from_utf8_lossy(planning_reader.header().samples()[sample_idx]).into_owned()
+    };
+    let out_header = make_all_sites_header(cfg, planning_reader.header());
+
+    let mut st = Stats::default();
+    let mut assignments_by_index: HashMap<usize, PhaseAssignment> = HashMap::new();
+
+    if cfg.phase_bam_path.is_some() {
+        if sample_count == 0 {
+            return Err(
+                "--emit all-sites --phase-from-bam requires at least one sample".to_string(),
+            );
+        }
+        if sample_count != 1 {
+            return Err("--emit all-sites --phase-from-bam currently updates one-sample VCF/BCF inputs only; use --emit mnv for selected-sample MNV construction".to_string());
+        }
+        let header_info = collect_header_info(&planning_reader, sample_idx)?;
+        let mut candidates = Vec::new();
+        let mut record = planning_reader.empty_record();
+        while let Some(result) = planning_reader.read(&mut record) {
+            result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+            st.records += 1;
+            if let Some(candidate) =
+                candidate_from_record(&record, &header_info, sample_idx, &mut st, cfg)?
+            {
+                candidates.push(candidate);
+            }
+        }
+        st.bam_phase_candidates = candidates.len() as u64;
+        assignments_by_index = phase_candidates_from_bam(cfg, &candidates, &mut st)?;
+    }
+    drop(planning_reader);
+
+    let mut reader = bcf::Reader::from_path(&cfg.input_path)
+        .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    if cfg.threads > 1 {
+        reader
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
+    }
+    let header_info = if cfg.phase_bam_path.is_some() {
+        Some(collect_header_info(&reader, sample_idx)?)
+    } else {
+        None
+    };
+    let mut writer = open_htslib_writer(cfg, &out_header)?;
+    let mut candidate_cursor = 0usize;
+    let mut record = reader.empty_record();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+        if cfg.phase_bam_path.is_none() {
+            st.records += 1;
+        }
+        let maybe_assignment = if let Some(header_info) = header_info.as_ref() {
+            let mut dummy = Stats::default();
+            if let Some(candidate) =
+                candidate_from_record(&record, header_info, sample_idx, &mut dummy, cfg)?
+            {
+                let idx = candidate_cursor;
+                candidate_cursor += 1;
+                assignments_by_index
+                    .get(&idx)
+                    .copied()
+                    .map(|assignment| (candidate, assignment))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        writer.translate(&mut record);
+        if let Some((candidate, assignment)) = maybe_assignment {
+            update_record_phase(&mut record, &candidate, assignment)?;
+            st.phased_records += 1;
+        }
+        writer
+            .write(&record)
+            .map_err(|e| format!("failed to write VCF/BCF record: {e}"))?;
+        st.emitted += 1;
+    }
+
+    print_summary(cfg, &st, &sample_label);
+    Ok(())
+}
+
 fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
     if cfg.quiet {
         return;
@@ -1873,7 +2224,7 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         sample
     );
     eprintln!(
-        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={} output_format={} threads={}",
+        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={} output_format={} threads={} emit={}",
         cfg.max_gap,
         cfg.min_variants,
         cfg.unsupported_alleles.as_str(),
@@ -1881,7 +2232,8 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         cfg.no_ref_check,
         cfg.no_header,
         infer_output_kind(cfg).as_str(),
-        cfg.threads
+        cfg.threads,
+        cfg.emit_mode.as_str()
     );
     if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
         eprintln!(
@@ -1927,6 +2279,9 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
 
 fn run() -> Result<(), String> {
     let cfg = parse_args();
+    if cfg.emit_mode == EmitMode::AllSites {
+        return run_all_sites(&cfg);
+    }
     let (header, mut obs, mut st) = read_observations(&cfg)?;
 
     let fasta = CString::new(cfg.fasta_path.as_bytes())

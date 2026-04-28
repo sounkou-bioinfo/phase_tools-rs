@@ -180,6 +180,27 @@ The Rust binary infers output format from `-o/--output`:
 Use `--threads N` (or `-@ N`) to enable htslib/BGZF worker threads for compressed
 input and compressed output. Stdout remains plain VCF by default.
 
+## Output modes
+
+The default Rust and C behavior remains MNV-only:
+
+```text
+--emit mnv
+```
+
+It writes only derived `TYPE=MNV` / `TYPE=COMPLEX` records. The Rust binary also
+has an initial whole-input mode:
+
+```text
+--emit all-sites
+```
+
+This mode keeps every input VCF/BCF record, duplicates the original header via
+htslib, and appends `phase_mnv` metadata/header records instead of replacing the
+header. With `--phase-from-bam`, it updates `GT:PS` for phased one-sample inputs.
+It does not append MNV/COMPLEX records; whole-input-plus-recomposed-output is a
+separate future mode.
+
 ## C implementation
 
 Build against system htslib:

@@ -78,6 +78,27 @@ The Rust binary infers output format from `-o/--output`:
 Use `--threads N` (or `-@ N`) to enable htslib/BGZF worker threads for compressed
 input and compressed output. Stdout remains plain VCF by default.
 
+## Output modes
+
+The default Rust and C behavior remains MNV-only:
+
+```text
+--emit mnv
+```
+
+It writes only derived `TYPE=MNV` / `TYPE=COMPLEX` records. The Rust binary also
+has an initial whole-input mode:
+
+```text
+--emit all-sites
+```
+
+This mode keeps every input VCF/BCF record, duplicates the original header via
+htslib, and appends `phase_mnv` metadata/header records instead of replacing the
+header. With `--phase-from-bam`, it updates `GT:PS` for phased one-sample inputs.
+It does not append MNV/COMPLEX records; whole-input-plus-recomposed-output is a
+separate future mode.
+
 ## C implementation
 
 Build against system htslib:
@@ -118,6 +139,9 @@ options:
                         .bcf = BCF; stdout defaults to plain VCF
   -@, --threads N        Extra htslib/BGZF threads for decompression and
                         compressed output (default: 1)
+      --emit MODE        Output mode: mnv (default) or all-sites. all-sites
+                        is Rust-only, preserves input records/header, and
+                        updates GT/PS when used with --phase-from-bam
   -g, --max-gap N        Allow up to N unchanged reference bases between
                         phased variants when building one merged call (default: 0)
       --min-vars N       Minimum source variants per emitted call (default: 2)
@@ -157,6 +181,8 @@ Notes:
     TYPE=COMPLEX.
   * Output format is inferred from -o/--output. BCF output always includes
     a VCF/BCF header even if --no-header is set.
+  * --emit all-sites keeps the original VCF/BCF header via htslib and
+    appends phase_mnv metadata instead of replacing it.
   * Unless --quiet is set, summary stats go to stderr and include
     input/reference/output (output=stdout for VCF stdout), settings,
     skip counts, unsupported categories, and N counts.
