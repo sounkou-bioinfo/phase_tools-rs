@@ -19,6 +19,28 @@ pub struct Unitig {
 }
 
 #[derive(Debug, Clone)]
+pub struct AssemblyRead {
+    pub seq: String,
+    pub qual: Option<String>,
+}
+
+impl AssemblyRead {
+    pub fn sequence<S: Into<String>>(seq: S) -> Self {
+        Self {
+            seq: seq.into(),
+            qual: None,
+        }
+    }
+
+    pub fn fastq<S: Into<String>, Q: Into<String>>(seq: S, qual: Q) -> Self {
+        Self {
+            seq: seq.into(),
+            qual: Some(qual.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AssembleOptions {
     pub threads: i32,
     pub min_asm_overlap: i32,
@@ -36,18 +58,20 @@ impl Default for AssembleOptions {
             max_count: 1000,
             // fermi-lite uses ec_k < 0 to skip error correction. This is more
             // predictable for tiny local adjudication windows and smoke tests.
+            // Use --ec-k 0 in the CLI to enable fermi-lite's auto EC path,
+            // which can consume FASTQ/BAM base qualities when supplied.
             error_correction_k: -1,
         }
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-fn malloc_c_string(seq: &str) -> Result<*mut c_char, String> {
-    let c = CString::new(seq).map_err(|_| "sequence contains NUL byte".to_string())?;
+fn malloc_c_string(value: &str, label: &str) -> Result<*mut c_char, String> {
+    let c = CString::new(value).map_err(|_| format!("{label} contains NUL byte"))?;
     let bytes = c.as_bytes_with_nul();
     let ptr = unsafe { libc::malloc(bytes.len()) as *mut u8 };
     if ptr.is_null() {
-        return Err("malloc failed for fermi-lite sequence".to_string());
+        return Err(format!("malloc failed for fermi-lite {label}"));
     }
     unsafe {
         ptr.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
@@ -56,14 +80,45 @@ fn malloc_c_string(seq: &str) -> Result<*mut c_char, String> {
 }
 
 #[cfg(target_arch = "x86_64")]
+fn cleanup_partial(seqs_ptr: *mut ffi::bseq1_t, n_init: usize) {
+    unsafe {
+        for j in 0..n_init {
+            let rec = seqs_ptr.add(j);
+            if !(*rec).seq.is_null() {
+                libc::free((*rec).seq as *mut c_void);
+            }
+            if !(*rec).qual.is_null() {
+                libc::free((*rec).qual as *mut c_void);
+            }
+        }
+        libc::free(seqs_ptr as *mut c_void);
+    }
+}
+
+#[allow(dead_code)]
 pub fn assemble_sequences<S: AsRef<str>>(
     sequences: &[S],
     options: &AssembleOptions,
 ) -> Result<Vec<Unitig>, String> {
-    let clean = sequences
+    let reads = sequences
         .iter()
-        .map(|seq| seq.as_ref().trim().to_ascii_uppercase())
-        .filter(|seq| !seq.is_empty())
+        .map(|seq| AssemblyRead::sequence(seq.as_ref()))
+        .collect::<Vec<_>>();
+    assemble_reads(&reads, options)
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn assemble_reads(
+    reads: &[AssemblyRead],
+    options: &AssembleOptions,
+) -> Result<Vec<Unitig>, String> {
+    let clean = reads
+        .iter()
+        .map(|read| AssemblyRead {
+            seq: read.seq.trim().to_ascii_uppercase(),
+            qual: read.qual.as_ref().map(|q| q.trim().to_string()),
+        })
+        .filter(|read| !read.seq.is_empty())
         .collect::<Vec<_>>();
     if clean.is_empty() {
         return Ok(Vec::new());
@@ -79,29 +134,41 @@ pub fn assemble_sequences<S: AsRef<str>>(
         return Err("calloc failed for fermi-lite reads".to_string());
     }
 
-    for (i, seq) in clean.iter().enumerate() {
-        let seq_ptr = match malloc_c_string(seq) {
+    for (i, read) in clean.iter().enumerate() {
+        let seq_ptr = match malloc_c_string(&read.seq, "sequence") {
             Ok(ptr) => ptr,
             Err(e) => {
-                // fml_assemble takes ownership only on success; clean up what
-                // we allocated before returning this construction error.
-                unsafe {
-                    for j in 0..i {
-                        let prev = seqs_ptr.add(j);
-                        if !(*prev).seq.is_null() {
-                            libc::free((*prev).seq as *mut c_void);
-                        }
-                    }
-                    libc::free(seqs_ptr as *mut c_void);
-                }
+                cleanup_partial(seqs_ptr, i);
                 return Err(e);
             }
         };
+        let qual_ptr = match &read.qual {
+            Some(qual) => {
+                if qual.len() != read.seq.len() {
+                    cleanup_partial(seqs_ptr, i);
+                    unsafe { libc::free(seq_ptr as *mut c_void) };
+                    return Err(format!(
+                        "quality length ({}) does not match sequence length ({})",
+                        qual.len(),
+                        read.seq.len()
+                    ));
+                }
+                match malloc_c_string(qual, "quality string") {
+                    Ok(ptr) => ptr,
+                    Err(e) => {
+                        cleanup_partial(seqs_ptr, i);
+                        unsafe { libc::free(seq_ptr as *mut c_void) };
+                        return Err(e);
+                    }
+                }
+            }
+            None => ptr::null_mut(),
+        };
         unsafe {
             let rec = seqs_ptr.add(i);
-            (*rec).l_seq = seq.len() as i32;
+            (*rec).l_seq = read.seq.len() as i32;
             (*rec).seq = seq_ptr;
-            (*rec).qual = ptr::null_mut();
+            (*rec).qual = qual_ptr;
         }
     }
 
@@ -149,8 +216,8 @@ pub fn assemble_sequences<S: AsRef<str>>(
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-pub fn assemble_sequences<S: AsRef<str>>(
-    _sequences: &[S],
+pub fn assemble_reads(
+    _reads: &[AssemblyRead],
     _options: &AssembleOptions,
 ) -> Result<Vec<Unitig>, String> {
     Err("fermi-lite assembly is currently enabled only on x86_64 targets because upstream ksw.c requires SSE2".to_string())

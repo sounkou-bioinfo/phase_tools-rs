@@ -11,7 +11,7 @@ on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
 | Default output | Derived MNV/COMPLEX records only (`--emit mnv`). |
 | Canonical implementation | Rust (`src/main.rs`), built on `rust-htslib`. |
 | Native dependencies | Vendored C libraries only when useful, exposed through generated/bindgen-backed FFI wrappers. |
-| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, native phase comparison, native VCF/BCF unphasing, and experimental fermi-lite local assembly bindings. |
+| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, native phase comparison, native VCF/BCF unphasing, empirical BAM error-model summaries, and experimental fermi-lite local assembly bindings. |
 
 The Rust binary uses `rust-htslib` for VCF/BCF/BAM/CRAM APIs and only drops to
 `rust_htslib::htslib` where exact htslib behavior is needed. Rust-only features
@@ -37,7 +37,7 @@ Build or install variants:
 make install          # install Rust CLIs to ~/.local/bin
 make static-release   # static Linux Rust binary when supported
 make install-static   # install static Linux binary when supported
-# cargo also builds phase_compare, unphase_vcf, and fermi_lite_assemble
+# cargo also builds phase_compare, unphase_vcf, fermi_lite_assemble, and bam_error_model
 ```
 
 Override the Rust target when needed:
@@ -244,17 +244,42 @@ usage: fermi_lite_assemble [options] [--seq SEQ ...]
 
 Small fermi-lite FFI smoke/utility binary. With --seq, assembles the supplied
 sequences. Without --seq, reads one plain sequence per non-empty stdin line,
-ignoring FASTA-style header lines. This is intended for local adjudication
-experiments, not as a full fermi-lite CLI replacement.
+ignoring FASTA-style header lines. With --fastq, reads FASTQ from stdin and
+passes base qualities to fermi-lite's error-correction path when --ec-k >= 0.
+This is intended for local adjudication experiments, not as a full fermi-lite
+CLI replacement.
 
 options:
 --seq SEQ              Add one input read/sequence
+--fastq                Read FASTQ records from stdin instead of plain lines
 -@, --threads N            fermi-lite threads (default: 1)
 --min-asm-ovlp N       minimum assembly overlap (default: 21)
 --min-count N          minimum k-mer count threshold (default: 1)
 --max-count N          maximum k-mer count threshold (default: 1000)
 --ec-k N               error-correction k; negative disables EC (default: -1)
 -h, --help                 Show this help
+```
+
+### BAM empirical error model helper (`bam_error_model`)
+
+```text
+usage: bam_error_model --reference ref.fa [options] reads.bam|reads.cram
+
+Learn a simple empirical sequencing-error table from aligned reads by comparing
+BAM/CRAM bases to a FASTA reference. No MAPQ filter is applied by default; MAPQ
+is summarized as a covariate. Known variant sites are not masked yet, so real
+biological variants contribute to the mismatch rate unless callers restrict the
+regions accordingly.
+
+options:
+-r, --reference FILE       FASTA reference with .fai
+--region REG          Restrict to region CHR:START-END (1-based, repeatable)
+--max-reads N         Stop after N usable reads
+--min-mapq N          Optional MAPQ cutoff (default: 0; no cutoff)
+--include-duplicates  Include duplicate reads
+--include-secondary   Include secondary alignments
+--include-supplementary Include supplementary alignments
+-h, --help                Show this help
 ```
 
 ## Examples
@@ -384,7 +409,7 @@ paths or data names are embedded.
 CI and default tests use only tracked fixtures under `tests/fixtures/`.
 
 ```bash
-make test                  # Rust behavior, unphase_vcf, output-format, bcftools norm, BAM phasing, phase_compare, fermi-lite FFI, and negative tests
+make test                  # Rust behavior, unphase_vcf, output-format, bcftools norm, BAM phasing, phase_compare, fermi-lite FFI, BAM error model, and negative tests
 make compare-whatshap-phase # optional WhatsHap truth path compared with native phase_compare
 ```
 
@@ -461,8 +486,19 @@ intentionally small: `src/fermi_lite.rs` wraps
 `fml_opt_init`, `fml_assemble`, and
 `fml_utg_destroy`, and
 `fermi_lite_assemble` is a smoke/utility binary for assembling supplied local
-read sequences into FASTA unitigs. It is not yet integrated into
-`phase_compare` or a final `phase_adjudicate` workflow.
+read sequences into FASTA unitigs. It can pass FASTQ/base qualities through to
+fermi-lite when `--fastq --ec-k 0` or another non-negative `--ec-k` is used.
+
+`bam_error_model` is a separate helper that learns simple empirical mismatch,
+insertion, and deletion summaries from a BAM/CRAM versus a reference, without a
+MAPQ filter by default. It reports base-quality and MAPQ bins so a future
+`phase_adjudicate` path can separate local assembly from quality-aware evidence
+scoring. Known variant sites are not masked yet, so mismatch rates from this
+helper should be interpreted as sequencing-error-plus-variation unless regions
+are restricted to homozygous-reference/high-confidence sites.
+
+Neither helper is yet integrated into `phase_compare` or a final
+`phase_adjudicate` workflow.
 
 If you use fermi-lite-backed local assembly results, cite the FermiKit paper
 recommended by fermi-lite (Li 2015, Bioinformatics; doi:10.1093/bioinformatics/btv440).
@@ -489,7 +525,7 @@ GitHub Actions builds and tests the Rust project on Linux and macOS:
 - behavior and negative/failure-mode tests for the Rust binaries
 - Rust `bcftools norm` validation of emitted normalized records
 - Linux WhatsHap-derived all-sites phase comparison with native `phase_compare`
-- native `unphase_vcf` and fermi-lite FFI smoke coverage
+- native `unphase_vcf`, fermi-lite FFI, and BAM error-model smoke coverage
 - binary artifact upload with SHA256 sums
 
 ## Notes

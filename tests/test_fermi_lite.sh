@@ -37,4 +37,10 @@ EOF
 "$bin" --min-asm-ovlp 12 --min-count 1 --max-count 1000 < "$tmp/reads.txt" > "$tmp/stdin.fa"
 grep -q '^>utg1 ' "$tmp/stdin.fa"
 
+awk 'BEGIN{i=0} !/^>/ && NF {i++; print "@r" i "\n" $0 "\n+"; for (j=0; j<length($0); j++) printf "I"; printf "\n"}' \
+  "$tmp/reads.txt" > "$tmp/reads.fastq"
+"$bin" --fastq --ec-k 0 --min-asm-ovlp 12 --min-count 1 --max-count 1000 \
+  < "$tmp/reads.fastq" > "$tmp/fastq.fa"
+grep -q '^>utg1 ' "$tmp/fastq.fa"
+
 echo "fermi-lite FFI smoke test passed"

@@ -53,6 +53,13 @@ heuristics, all CLI options, and switch-error validated equivalence remain futur
 work. The compatibility contract is currently the tracked Rust fixture and local
 validation against WhatsHap on real data, not byte identity with WhatsHap.
 
+`bam_error_model` is a separate helper for learning empirical mismatch,
+insertion, and deletion summaries from BAM/CRAM reads against a FASTA reference.
+It applies no MAPQ cutoff by default and reports MAPQ/base-quality bins rather
+than filtering on them. Known variant sites are not masked yet, so its mismatch
+rate should be treated as an error-plus-variation estimate unless callers
+restrict the input to high-confidence homozygous-reference regions.
+
 For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:
 
