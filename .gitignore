@@ -2,6 +2,7 @@
 /dist/
 /.build/
 /reference_impls/
+/resources/
 /local_runs/
 /phase_mnv_from_bam/
 /c/phase_mnv
@@ -12,6 +13,12 @@
 *.vcf.gz
 !/tests/fixtures/*.vcf
 !/tests/fixtures/*.vcf.gz
+*.bam
+*.bai
+*.cram
+*.crai
+!/tests/fixtures/*.bam
+!/tests/fixtures/*.bai
 *.bcf.csi
 *.vcf.gz.tbi
 *.vcf.gz.csi

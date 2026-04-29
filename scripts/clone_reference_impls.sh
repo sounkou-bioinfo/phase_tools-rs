@@ -19,7 +19,6 @@ clone_or_update() {
   printf '%-10s %s\n' "$name" "$(git -C "$dest/$name" rev-parse HEAD)"
 }
 
-clone_or_update https://github.com/vcflib/vcflib.git vcflib
 clone_or_update https://github.com/whatshap/whatshap.git whatshap
 clone_or_update https://github.com/atks/vt.git vt
 clone_or_update https://github.com/samtools/bcftools.git bcftools

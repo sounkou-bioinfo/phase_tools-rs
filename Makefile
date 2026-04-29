@@ -5,9 +5,11 @@ INSTALL ?= install
 TARGET ?=
 TARGET_ARG := $(if $(TARGET),--target $(TARGET),)
 RELEASE_BIN ?= target/release/phase_mnv_rs
+PHASE_COMPARE_BIN ?= target/release/phase_compare
 STATIC_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_mnv_rs
+STATIC_PHASE_COMPARE_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_compare
 
-.PHONY: release static-release install install-static clean test negative-test c c-test c-negative-test c-static byte-test compare-vcflib readme readme-external-example check-readme
+.PHONY: release static-release install install-static clean test negative-test c c-test c-negative-test c-static byte-test compare-whatshap-phase readme readme-external-example check-readme
 
 release:
 	$(CARGO) build --release $(TARGET_ARG)
@@ -18,10 +20,12 @@ static-release:
 install: release
 	$(INSTALL) -d $(BINDIR)
 	$(INSTALL) -m 0755 $(RELEASE_BIN) $(BINDIR)/phase_mnv_rs
+	$(INSTALL) -m 0755 $(PHASE_COMPARE_BIN) $(BINDIR)/phase_compare
 
 install-static: static-release
 	$(INSTALL) -d $(BINDIR)
 	$(INSTALL) -m 0755 $(STATIC_BIN) $(BINDIR)/phase_mnv_rs
+	$(INSTALL) -m 0755 $(STATIC_PHASE_COMPARE_BIN) $(BINDIR)/phase_compare
 
 clean:
 	$(CARGO) clean
@@ -30,8 +34,10 @@ clean:
 test: release
 	./tests/test_phase_mnv.sh $(RELEASE_BIN)
 	./tests/test_output_formats.sh $(RELEASE_BIN)
+	./tests/test_bcftools_norm.sh $(RELEASE_BIN)
 	./tests/test_all_sites.sh $(RELEASE_BIN)
 	./tests/test_bam_phase.sh $(RELEASE_BIN)
+	./tests/test_phase_compare.sh $(PHASE_COMPARE_BIN)
 	./tests/test_negative.sh $(RELEASE_BIN)
 
 negative-test: release
@@ -52,8 +58,8 @@ c-static:
 byte-test: release c-test
 	./test_byte_identical.sh
 
-compare-vcflib: release
-	./scripts/compare_vcfgeno2haplo.sh
+compare-whatshap-phase: release
+	./scripts/compare_whatshap_phase.sh
 
 readme: release c
 	Rscript -e 'invisible(suppressWarnings(knitr::knit("README.Rmd", "README.md", quiet = TRUE)))'

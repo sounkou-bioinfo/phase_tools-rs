@@ -1,9 +1,9 @@
 cff-version: 1.2.0
 message: >-
   If you use phase_mnv_rs, please cite this software and explicitly cite the
-  variant-normalization paper whose left-aligned + parsimonious representation
-  is implemented here: Tan, Abecasis, and Kang (2015), DOI
-  10.1093/bioinformatics/btv112.
+  upstream methods matching your workflow: Tan, Abecasis, and Kang (2015) for
+  left-aligned + parsimonious normalization, and the appropriate WhatsHap paper
+  for WhatsHap-based or WhatsHap-inspired read-backed phasing.
 title: phase_mnv_rs
 type: software
 authors:
@@ -31,3 +31,51 @@ references:
     end: 2204
     doi: 10.1093/bioinformatics/btv112
     url: https://doi.org/10.1093/bioinformatics/btv112
+  - type: article
+    title: "WhatsHap: fast and accurate read-based phasing"
+    authors:
+      - family-names: Martin
+        given-names: Marcel
+      - family-names: Patterson
+        given-names: Murray
+      - family-names: Garg
+        given-names: Shilpa
+      - family-names: Fischer
+        given-names: Sarah O.
+      - family-names: Pisanti
+        given-names: Nadia
+      - family-names: Klau
+        given-names: Gunnar W.
+      - family-names: Schoenhuth
+        given-names: Alexander
+      - family-names: Marschall
+        given-names: Tobias
+    journal: bioRxiv
+    year: 2016
+    doi: 10.1101/085050
+    url: https://doi.org/10.1101/085050
+  - type: article
+    title: "WhatsHap: Weighted Haplotype Assembly for Future-Generation Sequencing Reads"
+    authors:
+      - family-names: Patterson
+        given-names: Murray
+      - family-names: Marschall
+        given-names: Tobias
+      - family-names: Pisanti
+        given-names: Nadia
+      - family-names: van Iersel
+        given-names: Leo
+      - family-names: Stougie
+        given-names: Leen
+      - family-names: Klau
+        given-names: Gunnar W.
+      - family-names: Schönhuth
+        given-names: Alexander
+    journal: Journal of Computational Biology
+    year: 2015
+    volume: 22
+    issue: 6
+    start: 498
+    end: 509
+    doi: 10.1089/cmb.2014.0157
+    url: https://doi.org/10.1089/cmb.2014.0157

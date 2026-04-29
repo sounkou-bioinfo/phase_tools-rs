@@ -23,6 +23,7 @@ run_tool <- function(cmd, args = "--help") {
 }
 
 phase_mnv_rs <- file.path("target", "release", "phase_mnv_rs")
+phase_compare <- file.path("target", "release", "phase_compare")
 phase_mnv_c <- file.path("c", "phase_mnv")
 fixture_ref <- file.path("tests", "fixtures", "ref.fa")
 
@@ -102,73 +103,71 @@ external_example <- function() {
 }
 ```
 
-Phased VCF/BCF haplotype merger that emits normalized `MNV` or `COMPLEX`
-records from variants carried on the same phased haplotype.
+`phase_mnv_rs` is a phased VCF/BCF haplotype merger. It takes variants carried
+on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
+`TYPE=COMPLEX` records.
 
-The repository contains two implementations:
+## Scope at a glance
 
-- `src/main.rs`: Rust implementation, depending on the `rust-htslib` crate.
-- `c/phase_mnv.c`: C/htslib reference implementation kept in-tree for
-  validation and byte-identical regression tests.
+| Area | Status |
+| --- | --- |
+| Default output | Derived MNV/COMPLEX records only (`--emit mnv`). |
+| Rust/C compatibility | Byte-identical for the supported non-BAM default MNV scope. |
+| Rust implementation | `src/main.rs`, built on `rust-htslib`. |
+| C reference | `c/phase_mnv.c`, kept for regression and byte-identity tests. |
+| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, and native phase comparison. |
 
-The Rust and C outputs are expected to be byte-identical for the supported
-scope. The Rust implementation depends on `rust-htslib` instead of directly on
-`hts-sys` so it can use higher-level BAM/BCF APIs for experimental
-WhatsHap-inspired read-backed phasing while still dropping to
-`rust_htslib::htslib` where exact htslib behavior is needed.
+The Rust binary uses `rust-htslib` for VCF/BCF/BAM/CRAM APIs and only drops to
+`rust_htslib::htslib` where exact htslib behavior is needed. Rust-only features
+are documented as experimental unless explicitly validated against an upstream
+reference.
 
-## Citation
-
-This tool's output normalization deliberately implements the left-aligned and
-parsimonious variant representation defined by:
-
-> Tan A, Abecasis GR, Kang HM. **Unified representation of genetic variants.**
-> *Bioinformatics.* 2015;31(13):2202-2204.
-> [doi:10.1093/bioinformatics/btv112](https://doi.org/10.1093/bioinformatics/btv112).
-
-Please cite that paper when relying on phase_mnv_rs normalized `REF`/`ALT`
-representation. The emitted VCF header also records the citation in
-`##phase_mnv_normalization_citation`.
-
-## Build
+## Quick start
 
 ```bash
 . "$HOME/.cargo/env"
 make release
+
+target/release/phase_mnv_rs \
+  --reference ref.fa \
+  --sample S1 \
+  --output mnv.vcf \
+  input.vcf.gz
 ```
 
-The normal Rust release binary is:
-
-```text
-target/release/phase_mnv_rs
-```
-
-For a fully static Linux Rust binary (static PIE; no `libhts.so`, no glibc
-runtime dependency):
+Build or install variants:
 
 ```bash
-make static-release
-host=$(rustc -vV | sed -n 's/^host: //p')
-ldd target/$host/release/phase_mnv_rs  # should say statically linked on Linux
+make install          # install target/release/phase_mnv_rs to ~/.local/bin
+make static-release   # static Linux Rust binary when supported
+make install-static   # install static Linux binary when supported
+make c                # build the C/htslib reference
+make c-static         # C binary with bundled/static htslib where supported
+# cargo also builds target/release/phase_compare for fast phase-concordance stats
 ```
 
-The Makefile does not hardcode a Rust target. Override when needed:
+Override the Rust target when needed:
 
 ```bash
 make release TARGET=aarch64-apple-darwin
 make static-release STATIC_TARGET=x86_64-unknown-linux-gnu
 ```
 
-Install to `~/.local/bin`:
+## Modes and output
 
-```bash
-make install          # normal release
-make install-static   # static release on Linux, bundled-htslib release elsewhere
-```
+| Option | Meaning |
+| --- | --- |
+| `--emit mnv` | Default. Emit only derived `TYPE=MNV` / `TYPE=COMPLEX` records. |
+| `--emit all-sites` | Rust only. Preserve all input records/header and update `GT:PS` where phasing is available. Does not append MNV/COMPLEX records yet. |
+| `--mnv-algorithm proximity` | Default window/phase-set recomposition used for Rust/C byte-identity tests. |
+| `--mnv-algorithm nirvana-codon --codon-map codons.tsv` | Rust only. Initial SNV-only same-codon recomposition slice; not full Nirvana parity. |
+| `--phase-from-bam reads.bam` | Rust only. Experimental indexed BAM/CRAM-backed phasing before output. |
 
-## Output formats and threads
+The codon map is BED-like: `CHROM START0 END0 TRANSCRIPT CODON_ID`. In
+`nirvana-codon` mode, phased SNV observations are recomposed only when at least
+two observations on the same haplotype/phase set share a transcript/codon key.
 
-The Rust binary infers output format from `-o/--output`:
+Output format is inferred from `-o/--output`:
 
 ```text
 -o out.vcf      plain VCF
@@ -177,59 +176,38 @@ The Rust binary infers output format from `-o/--output`:
 -o out.bcf      BCF
 ```
 
-Use `--threads N` (or `-@ N`) to enable htslib/BGZF worker threads for compressed
-input and compressed output. Stdout remains plain VCF by default.
+Use `--threads N` or `-@ N` for htslib/BGZF worker threads on compressed input
+and output. Stdout remains plain VCF.
 
-## Output modes
+## Citation
 
-The default Rust and C behavior remains MNV-only:
+Please cite the upstream methods that match the parts of `phase_mnv_rs` you use.
 
-```text
---emit mnv
-```
+For normalized `REF`/`ALT` representation:
 
-It writes only derived `TYPE=MNV` / `TYPE=COMPLEX` records. The default MNV
-construction algorithm is proximity-based. The Rust binary also has a first
-Nirvana-inspired SNV-only codon recomposition slice:
+> Tan A, Abecasis GR, Kang HM. **Unified representation of genetic variants.**
+> *Bioinformatics.* 2015;31(13):2202-2204.
+> [doi:10.1093/bioinformatics/btv112](https://doi.org/10.1093/bioinformatics/btv112).
 
-```text
---mnv-algorithm nirvana-codon --codon-map codons.tsv
-```
+For workflows that run external WhatsHap via
+`scripts/phase_from_bam_then_mnv.sh`:
 
-The codon map is BED-like (`CHROM START0 END0 TRANSCRIPT CODON_ID`). In this
-mode, phased SNV observations are recomposed only when two or more observations
-on the same haplotype/phase set share a transcript/codon key. This captures
-Nirvana's same-codon seed rule without yet claiming full Nirvana parity.
+> Martin M, Patterson M, Garg S, Fischer SO, Pisanti N, Klau GW, Schoenhuth A,
+> Marschall T. **WhatsHap: fast and accurate read-based phasing.**
+> *bioRxiv.* 085050.
+> [doi:10.1101/085050](https://doi.org/10.1101/085050).
 
-The Rust binary also has an initial whole-input mode:
+For the read-backed weighted haplotype assembly/MEC ideas behind the
+experimental Rust `--phase-from-bam --phase-algorithm mec` mode:
 
-```text
---emit all-sites
-```
+> Patterson M, Marschall T, Pisanti N, van Iersel L, Stougie L, Klau GW,
+> Schönhuth A. **WhatsHap: Weighted Haplotype Assembly for Future-Generation
+> Sequencing Reads.** *Journal of Computational Biology.* 2015;22(6):498-509.
+> [doi:10.1089/cmb.2014.0157](https://doi.org/10.1089/cmb.2014.0157).
 
-This mode keeps every input VCF/BCF record, duplicates the original header via
-htslib, and appends `phase_mnv` metadata/header records instead of replacing the
-header. With `--phase-from-bam`, it updates `GT:PS` for phased one-sample inputs.
-It does not append MNV/COMPLEX records; whole-input-plus-recomposed-output is a
-separate future mode.
-
-## C implementation
-
-Build against system htslib:
-
-```bash
-make -C c
-```
-
-Build a bundled/static-htslib C binary:
-
-```bash
-make c-static
-```
-
-On Linux this script attempts a fully static executable. On macOS, fully static
-executables are not supported by the platform; the script links `libhts.a`
-statically while system libraries remain dynamic.
+The Rust BAM phaser is WhatsHap-inspired, not a full WhatsHap/PedMEC clone. Use
+WhatsHap itself when you need established WhatsHap behavior and cite the
+appropriate WhatsHap publication for that workflow.
 
 ## CLI help
 
@@ -240,6 +218,12 @@ The help text below is generated directly from the built binaries when
 
 ```{r rust-help, results='asis'}
 fence(run_tool(file.path("target", "release", "phase_mnv_rs")))
+```
+
+### Phase comparison binary (`phase_compare`)
+
+```{r phase-compare-help, results='asis'}
+fence(run_tool(phase_compare))
 ```
 
 ### C binary (`phase_mnv`)
@@ -390,72 +374,17 @@ external_example()
 
 ## Test
 
-All CI tests use explicit files under `tests/fixtures/`:
-
-```text
-tests/fixtures/ref.fa
-tests/fixtures/phased_mnv.vcf
-tests/fixtures/phased_mnv.expected.body.vcf
-tests/fixtures/gap.vcf
-tests/fixtures/gap.max0.expected.body.vcf
-tests/fixtures/gap.max1.expected.body.vcf
-tests/fixtures/complex.vcf
-tests/fixtures/complex.expected.body.vcf
-tests/fixtures/multiallelic.vcf
-tests/fixtures/multiallelic.expected.body.vcf
-tests/fixtures/symbolic.vcf
-tests/fixtures/symbolic.max1.expected.body.vcf
-tests/fixtures/n_base.vcf
-tests/fixtures/n_base.expected.body.vcf
-tests/fixtures/read_phase.vcf
-tests/fixtures/read_phase.sam
-tests/fixtures/read_phase.bam
-tests/fixtures/read_phase.bam.bai
-tests/fixtures/read_phase.expected.body.vcf
-tests/fixtures/byte_identity.vcf
-tests/fixtures/ref_mismatch.vcf
-tests/fixtures/truncated.vcf.gz
-tests/fixtures/vcfgeno2haplo_compare.vcf
-```
-
-Run Rust behavior and negative/failure-mode tests:
+CI and default tests use only tracked fixtures under `tests/fixtures/`.
 
 ```bash
-make test
+make test                  # Rust behavior, output-format, bcftools norm, BAM phasing, phase_compare, and negative tests
+make c-test                # C behavior and negative tests
+make byte-test             # Rust/C byte identity on the public byte-identity fixture
+make compare-whatshap-phase # optional WhatsHap truth path compared with native phase_compare
 ```
 
-Run only Rust negative/failure-mode tests:
-
-```bash
-make negative-test
-```
-
-Run C behavior and negative/failure-mode tests:
-
-```bash
-make c-test
-```
-
-Run only C negative/failure-mode tests:
-
-```bash
-make c-negative-test
-```
-
-Compare Rust and C byte-for-byte on the explicit byte-identity fixture:
-
-```bash
-./tests/byte_identical_synthetic.sh target/release/phase_mnv_rs c/phase_mnv
-```
-
-Compare byte-for-byte against the C tool on the explicit public fixture:
-
-```bash
-make byte-test
-```
-
-For private/local datasets, provide paths explicitly from your shell; no private
-paths are embedded in this repository:
+For private or larger local datasets, pass paths from your shell; no private
+paths are embedded in the repository or rendered README:
 
 ```bash
 VCF=input.vcf.gz REF=ref.fa SAMPLE=S1 make byte-test
@@ -488,28 +417,29 @@ needed for comparison or compatibility work:
 ./scripts/clone_reference_impls.sh
 ```
 
-### Optional `vcflib vcfgeno2haplo` comparison
+### Optional WhatsHap phase-concordance comparison
 
-`vcfgeno2haplo` is the closest conceptual match for phased genotype-to-haplotype
-allele construction, but it is not a byte-identity oracle for this tool. It does
-not emit the same `TYPE=MNV`/`TYPE=COMPLEX` schema and it ignores `FORMAT/PS`, so
-we compare a narrow semantic projection on a fixture designed for the overlapping
-scope: adjacent phased SNVs in one sample.
-
-Run the comparison with micromamba-managed vcflib:
+The external phasing comparison uses WhatsHap plus the native `phase_compare`
+binary. It builds a truth path by unphasing the tiny tracked VCF and running
+external `whatshap phase`. It builds the query path by running Rust
+`phase_mnv_rs --emit all-sites --phase-from-bam` directly on the same VCF/BAM.
+Then `phase_compare` reports common heterozygous sites, intersection PS blocks,
+assessed adjacent pairs, phase matches, switch errors, and blockwise Hamming
+rate:
 
 ```bash
-make compare-vcflib
+make compare-whatshap-phase
 ```
 
-The script uses `vcfgeno2haplo` from `PATH` when available, or creates/runs a
-micromamba environment named `phase-mnv-vcflib` with `vcflib=1.0.15` by default.
-Override with `VCFLIB_ENV` or `VCFLIB_SPEC` when needed. It compares these
-projected columns only:
+This is intentionally faster and narrower than hap.py: it measures phasing and
+PS/block concordance, not generic variant-call equivalence. The comparison
+script strips bcftools/producer command headers and path-bearing
+`phase_mnv`/reference records from generated VCFs before comparison, so local
+filesystem paths are not retained in comparison VCF headers.
 
-```text
-CHROM POS REF ALT GT
-```
+The script discovers `whatshap` from `PATH`, then falls back to a micromamba
+environment named `phase-mnv-whatshap`. Override with `WHATSHAP_BIN` or
+`WHATSHAP_ENV` when needed.
 
 Detailed semantics and validation notes are in:
 
@@ -518,10 +448,10 @@ Detailed semantics and validation notes are in:
 
 The most relevant upstream tools are:
 
-- `vcflib vcfgeno2haplo` — closest conceptual match for converting phased
-  genotypes in a window into haplotype alleles.
 - `whatshap phase` / `whatshap haplotag` — established read-backed phasing
-  reference for future BAM/CRAM work.
+  reference for BAM/CRAM validation and external phasing workflows.
+- `phase_compare` — in-repository native phase-concordance comparator for
+  WhatsHap-derived all-sites truth versus Rust BAM-backed all-sites output.
 - `vt normalize` — normalization reference for left-aligned + parsimonious
   representation.
 - `bcftools norm` — useful validator for emitted normalized records.
@@ -535,8 +465,9 @@ GitHub Actions builds and tests both implementations on Linux and macOS:
 - Rust release/static where supported
 - C binary with bundled static `libhts.a`
 - behavior and negative/failure-mode tests for both binaries
+- Rust `bcftools norm` validation of emitted normalized records
 - byte-identical Rust-vs-C synthetic fixture test
-- Linux semantic-projection comparison against `vcflib=1.0.15` `vcfgeno2haplo`
+- Linux WhatsHap-derived all-sites phase comparison with native `phase_compare`
 - binary artifact upload with SHA256 sums
 
 ## Notes

@@ -49,11 +49,15 @@ Behavior fixtures cover:
 - Rust output format inference for plain VCF, BGZF-compressed VCF, and BCF,
   including `--threads` plumbing for compressed input/output checks when
   `bcftools` is available
+- `bcftools norm -f ... -c x` checks that emitted MNV/COMPLEX records are not
+  further realigned or mismatch-removed on tracked fixtures
 - Rust `--emit all-sites` header preservation: the original VCF header is kept
   and `phase_mnv` metadata is appended while BAM-backed `GT:PS` updates are
   applied to all input records in the tiny tracked fixture
 - Rust `--mnv-algorithm nirvana-codon` same-codon SNV recomposition on a tracked
   BED-like codon-map fixture
+- native `phase_compare` switch-error, phase-match, and blockwise-Hamming stats
+  on a tiny tracked truth/query fixture
 - Rust/C byte identity for supported synthetic cases
 
 ## Negative/failure-mode fixtures
@@ -82,55 +86,55 @@ The truncated-input fixture is tracked explicitly:
 tests/fixtures/truncated.vcf.gz
 ```
 
-## `vcflib vcfgeno2haplo` comparison
+## WhatsHap + native `phase_compare`
 
-`vcflib vcfgeno2haplo` is the closest conceptual upstream tool for converting
-phased genotypes within a window into haplotype alleles. It is **not** a
-byte-identical oracle for this project because:
-
-- it emits haplotype-allele VCF records, not the `TYPE=MNV` / `TYPE=COMPLEX`
-  schema used by `phase_mnv_rs`
-- it clusters by a window rule and does not honor `FORMAT/PS` like this tool
-- it may pass through non-cluster input records, while this tool emits only
-  merged haplotype records
-- normalization responsibilities differ
-
-The comparison is therefore intentionally narrow: adjacent phased SNVs in one
-sample, projected to fields that both tools can represent directly.
+The external conformance comparison is WhatsHap-based and no longer uses
+hap.py. It uses the in-repository `phase_compare` binary, which is a narrow,
+fast phase-concordance comparator.
 
 Run:
 
 ```bash
-make compare-vcflib
+make compare-whatshap-phase
 ```
 
-Default upstream package:
+The script compares two paths on the tracked tiny BAM/VCF fixture by default:
+
+1. unphase the input VCF with `scripts/unphase_vcf.py`;
+2. run external `whatshap phase` on the unphased VCF and BAM to create the truth
+   all-sites phased VCF;
+3. run Rust `phase_mnv_rs --emit all-sites --phase-from-bam` directly on the
+   input VCF and BAM to create the query all-sites phased VCF;
+4. run `phase_compare` on truth/query all-sites VCFs.
+
+Default fixture inputs:
 
 ```text
-vcflib=1.0.15
+tests/fixtures/read_phase.vcf
+tests/fixtures/read_phase.bam
+tests/fixtures/ref.fa
 ```
 
-Default fixture:
+`phase_compare` reports exact shared variant records, common heterozygous sites,
+phased sites with PS in both files, intersection PS blocks, assessed adjacent
+pairs, phase-match pairs, switch errors, switch rate, and blockwise Hamming
+rate. The comparison is a phase/PS-block metric, not a generic variant-call
+matching metric.
 
-```text
-tests/fixtures/vcfgeno2haplo_compare.vcf
-```
+The generated VCFs are passed through `scripts/sanitize_vcf_headers.py`, which
+removes `##bcftools_*` headers, producer command-line headers, and path-bearing
+`phase_mnv`/reference header records before comparison. This keeps local
+filesystem paths out of comparison VCFs.
 
-Projection compared:
-
-```text
-CHROM POS REF ALT GT
-```
-
-The script uses `vcfgeno2haplo` from `PATH` when available. Otherwise it uses
-micromamba to create/run an environment named `phase-mnv-vcflib`.
+The comparison script discovers `whatshap` from `PATH` first, then falls back to
+a micromamba environment named `phase-mnv-whatshap`.
 
 Relevant overrides:
 
 ```bash
-VCFLIB_ENV=my-env make compare-vcflib
-VCFLIB_SPEC='vcflib=1.0.15' make compare-vcflib
-VCFGENO2HAPLO_BIN=/path/to/vcfgeno2haplo make compare-vcflib
+WHATSHAP_BIN=whatshap make compare-whatshap-phase
+WHATSHAP_ENV=my-whatshap-env make compare-whatshap-phase
+REF=ref.fa VCF=input.vcf.gz BAM=reads.bam SAMPLE=S1 ALLOW_NONPERFECT=1 make compare-whatshap-phase
 ```
 
 ## Nirvana recomposition benchmark target
@@ -147,11 +151,24 @@ is not vendored:
 The first implemented benchmark slice is `--mnv-algorithm nirvana-codon` (see
 `docs/nirvana_benchmark.md`), which uses a small BED-like codon map and emits
 SNV-only MNVs where two or more phased SNV observations share a transcript/codon
-key. The broader intended benchmark
-scope remains Nirvana-like phase-set and homozygous-variant semantics,
-adjacent-codon aggregation, unsupported-overlap barriers, sample-specific
-multi-sample recomposition, and exact linkage/quality/filter behavior.
-Indel/complex recomposition remains a separate policy decision.
+key. For local GRCh37 experiments, build an ignored Ensembl-derived codon map
+with:
+
+```bash
+./scripts/download_grch37_codon_map.sh
+```
+
+For large real VCFs, prefer a map restricted to SNV positions in that VCF:
+
+```bash
+VCF=input.vcf.gz ./scripts/download_grch37_codon_map.sh
+```
+
+The broader intended benchmark scope remains Nirvana-like phase-set and
+homozygous-variant semantics, adjacent-codon aggregation,
+unsupported-overlap barriers, sample-specific multi-sample recomposition, and
+exact linkage/quality/filter behavior. Indel/complex recomposition remains a
+separate policy decision.
 
 ## Normalization references
 

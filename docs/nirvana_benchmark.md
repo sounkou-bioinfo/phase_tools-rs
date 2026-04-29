@@ -19,6 +19,24 @@ The codon map is BED-like:
 CHROM START0 END0 TRANSCRIPT CODON_ID [ignored...]
 ```
 
+For local GRCh37 experiments, generate an ignored Ensembl GRCh37 codon map from
+GTF CDS features:
+
+```bash
+./scripts/download_grch37_codon_map.sh
+```
+
+For a real VCF, prefer a variant-position subset so startup and memory stay
+reasonable:
+
+```bash
+VCF=input.vcf.gz ./scripts/download_grch37_codon_map.sh
+```
+
+This writes to `resources/` by default and is not committed. The full genome map
+can be large. The converter emits multiple intervals with the same
+`TRANSCRIPT/CODON_ID` when a codon crosses a splice junction.
+
 Implemented scope:
 
 - SNV-only recomposition.

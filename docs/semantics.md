@@ -203,6 +203,23 @@ tests/fixtures/symbolic.vcf
 tests/fixtures/symbolic.max1.expected.body.vcf
 ```
 
+## gVCF and `<NON_REF>` records
+
+`phase_mnv_rs` can read VCF/BCF files that contain gVCF-style records, but it
+currently treats them with the same allele-selection rules as any other VCF:
+
+- homozygous-reference block records such as `ALT=<NON_REF>; GT=0/0` contribute
+  no alternate haplotype observation;
+- records with a real selected ALT plus an unselected `<NON_REF>` allele can
+  still contribute the real selected ALT observation;
+- a selected `<NON_REF>` or `<*>` allele is unsupported and is skipped by
+  default, or fails under `--unsupported-alleles fail`;
+- gVCF `END` block spans are not treated as merge barriers.
+
+For conformance work, prefer a variants-only VCF when available. gVCF input is
+acceptable as transport, but full gVCF block semantics are not a recomposition
+contract for this tool yet.
+
 ## Ambiguous `N` bases
 
 `N` is currently treated as plain DNA, so selected alleles containing `N` can

@@ -55,16 +55,22 @@ jobs:
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             host=$(rustc -vV | sed -n 's/^host: //p')
             bin="target/${host}/release/phase_mnv_rs"
+            phase_compare="target/${host}/release/phase_compare"
           else
             bin="target/release/phase_mnv_rs"
+            phase_compare="target/release/phase_compare"
           fi
           test -x "$bin"
+          test -x "$phase_compare"
           echo "path=$bin" >> "$GITHUB_OUTPUT"
-          file "$bin"
+          echo "phase_compare=$phase_compare" >> "$GITHUB_OUTPUT"
+          file "$bin" "$phase_compare"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             ldd "$bin" || true
+            ldd "$phase_compare" || true
           else
             otool -L "$bin"
+            otool -L "$phase_compare"
           fi
 
       - name: Test Rust binary
@@ -72,8 +78,10 @@ jobs:
         run: |
           ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_output_formats.sh "${{ steps.rust-bin.outputs.path }}"
+          ./tests/test_bcftools_norm.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_all_sites.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_bam_phase.sh "${{ steps.rust-bin.outputs.path }}"
+          ./tests/test_phase_compare.sh "${{ steps.rust-bin.outputs.phase_compare }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
 
       - name: Build C static/bundled-htslib binary
@@ -104,21 +112,23 @@ jobs:
         shell: bash
         run: ./tests/byte_identical_synthetic.sh "${{ steps.rust-bin.outputs.path }}" c/phase_mnv
 
-      - name: Set up micromamba with vcflib
+      - name: Set up micromamba with WhatsHap
         if: runner.os == 'Linux'
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-name: phase-mnv-vcflib
+          environment-name: phase-mnv-whatshap
           create-args: >-
             -c conda-forge
             -c bioconda
-            vcflib=1.0.15
+            whatshap=2.8
+            bcftools
+            samtools
           cache-environment: true
 
-      - name: Compare with vcflib vcfgeno2haplo semantic projection
+      - name: Compare with WhatsHap using native phase_compare
         if: runner.os == 'Linux'
         shell: bash
-        run: make compare-vcflib
+        run: make compare-whatshap-phase
 
       - name: Package binaries
         shell: bash
@@ -126,6 +136,7 @@ jobs:
           mkdir -p dist-ci
           suffix="$(printf '%s-%s' "$RUNNER_OS" "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           cp "${{ steps.rust-bin.outputs.path }}" "dist-ci/phase_mnv_rs-${suffix}"
+          cp "${{ steps.rust-bin.outputs.phase_compare }}" "dist-ci/phase_compare-${suffix}"
           cp c/phase_mnv "dist-ci/phase_mnv_c-${suffix}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
