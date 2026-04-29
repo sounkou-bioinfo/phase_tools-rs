@@ -868,8 +868,8 @@ fn collect_header_info(reader: &bcf::Reader, sample_idx: usize) -> Result<Header
     let samples = header.samples();
     let sample = String::from_utf8_lossy(samples[sample_idx]).into_owned();
 
-    // Keep the same compact contig output as the C implementation.  For normal
-    // VCF headers this is the header/RID order used by htslib.
+    // Keep compact contig output. For normal VCF headers this is the header/RID
+    // order used by htslib.
     let mut contigs = Vec::new();
     for rid in 0..header.contig_count() {
         let name = header

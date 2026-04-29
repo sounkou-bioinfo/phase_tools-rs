@@ -1,7 +1,7 @@
 # Variant semantics
 
-This document defines the currently supported semantics for `phase_mnv_rs`. The
-C implementation is kept byte-identical for this scope.
+This document defines the currently supported semantics for the Rust-only
+`phase_mnv_rs` implementation.
 
 ## Input model
 
@@ -56,15 +56,16 @@ validation against WhatsHap on real data, not byte identity with WhatsHap.
 For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:
 
-1. runs `scripts/unphase_vcf.py` to replace `|` with `/` in GT fields;
+1. runs the native `unphase_vcf` binary to replace `|` with `/` in GT fields;
 2. drops `FORMAT/PS` and `FORMAT/PQ` by default, because those tags describe the
    discarded phase state;
 3. runs `whatshap phase` with an explicitly supplied BAM/CRAM and reference
    FASTA;
 4. runs `phase_mnv_rs` on the WhatsHap-phased VCF.
 
-The unphasing helper does not change alleles, filters, INFO fields, or non-phase
-FORMAT values. It is a preparation step for external phasing comparisons.
+The unphasing helper reads VCF/VCF.GZ/BCF through rust-htslib and writes VCF;
+it does not change alleles, filters, INFO fields, or non-phase FORMAT values. It
+is a preparation step for external phasing comparisons.
 
 ## Output model
 

@@ -19,6 +19,7 @@ options:
   -p, --prefix NAME          Output file prefix (default: sample name)
   -g, --max-gap N            phase_mnv_rs --max-gap value (default: 0)
       --phase-mnv-bin FILE   phase_mnv_rs binary (default: target/release/phase_mnv_rs)
+      --unphase-bin FILE     unphase_vcf binary (default: target/release/unphase_vcf)
       --whatshap FILE        whatshap executable (default: whatshap from PATH)
       --whatshap-extra ARGS  Extra shell words appended to `whatshap phase`
       --keep-phase-tags      Keep FORMAT/PS and FORMAT/PQ in the unphased VCF
@@ -52,6 +53,7 @@ out_dir="phase_mnv_from_bam"
 prefix=""
 max_gap="0"
 phase_mnv_bin="$repo_dir/target/release/phase_mnv_rs"
+unphase_bin="$repo_dir/target/release/unphase_vcf"
 whatshap_bin="whatshap"
 whatshap_extra=""
 keep_phase_tags=0
@@ -74,6 +76,8 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "$1 requires an argument"; max_gap=$2; shift 2 ;;
     --phase-mnv-bin)
       [[ $# -ge 2 ]] || die "$1 requires an argument"; phase_mnv_bin=$2; shift 2 ;;
+    --unphase-bin)
+      [[ $# -ge 2 ]] || die "$1 requires an argument"; unphase_bin=$2; shift 2 ;;
     --whatshap)
       [[ $# -ge 2 ]] || die "$1 requires an argument"; whatshap_bin=$2; shift 2 ;;
     --whatshap-extra)
@@ -95,7 +99,6 @@ done
 [[ -f "$vcf" ]] || die "VCF/BCF does not exist: $vcf"
 [[ "$max_gap" =~ ^[0-9]+$ ]] || die "--max-gap must be a non-negative integer"
 
-command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v bcftools >/dev/null 2>&1 || die "bcftools is required to sample-detect/index outputs"
 command -v "$whatshap_bin" >/dev/null 2>&1 || die "whatshap not found: $whatshap_bin"
 
@@ -105,6 +108,13 @@ if [[ ! -x "$phase_mnv_bin" ]]; then
   fi
 fi
 [[ -x "$phase_mnv_bin" ]] || die "phase_mnv_rs binary is not executable: $phase_mnv_bin"
+
+if [[ ! -x "$unphase_bin" ]]; then
+  if [[ "$unphase_bin" == "$repo_dir/target/release/unphase_vcf" ]]; then
+    (cd "$repo_dir" && cargo build --release --bin unphase_vcf)
+  fi
+fi
+[[ -x "$unphase_bin" ]] || die "unphase_vcf binary is not executable: $unphase_bin"
 
 if [[ -z "$sample" ]]; then
   sample=$(bcftools query -l "$vcf" | head -n 1)
@@ -123,16 +133,16 @@ mnv_vcf="$out_dir/$prefix.phase_mnv.vcf"
 whatshap_log="$out_dir/$prefix.whatshap.log"
 mnv_log="$out_dir/$prefix.phase_mnv.log"
 
-unphase_args=("$script_dir/unphase_vcf.py" "$vcf")
+unphase_args=("$unphase_bin" "$vcf")
 if [[ "$keep_phase_tags" -eq 1 ]]; then
   unphase_args+=(--keep-phase-tags)
 fi
 
 printf 'phase_from_bam_then_mnv: writing %s\n' "$unphased_vcf" >&2
 if command -v bgzip >/dev/null 2>&1; then
-  python3 "${unphase_args[@]}" | bgzip -c > "$unphased_vcf"
+  "${unphase_args[@]}" | bgzip -c > "$unphased_vcf"
 else
-  python3 "${unphase_args[@]}" | bcftools view -Oz -o "$unphased_vcf" -
+  "${unphase_args[@]}" | bcftools view -Oz -o "$unphased_vcf" -
 fi
 bcftools index -f "$unphased_vcf"
 

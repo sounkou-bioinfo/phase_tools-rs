@@ -1,28 +1,7 @@
 # Validation notes
 
-This repository validates `phase_mnv_rs` with explicit tracked fixtures and an
-in-tree C/htslib reference implementation. No private/local paths are embedded
-in tests or documentation.
-
-## Rust/C byte identity
-
-The strongest compatibility target is byte-for-byte identity between the Rust
-implementation and the C implementation for the supported scope.
-
-Default command:
-
-```bash
-make byte-test
-```
-
-This runs both binaries on:
-
-```text
-tests/fixtures/byte_identity.vcf
-tests/fixtures/ref.fa
-```
-
-and compares both VCF output and stderr logs with `cmp`.
+This Rust-only repository validates `phase_mnv_rs` with explicit tracked
+fixtures. No private/local paths are embedded in tests or documentation.
 
 ## Positive behavior fixtures
 
@@ -30,7 +9,6 @@ Run:
 
 ```bash
 make test
-make c-test
 ```
 
 Behavior fixtures cover:
@@ -41,8 +19,9 @@ Behavior fixtures cover:
 - selected ALT handling at multi-allelic sites
 - symbolic/non-DNA ALT skipping semantics
 - `--warn-on-n` warnings while preserving `N` as plain DNA
-- `scripts/unphase_vcf.py` conversion of phased GT separators to unphased GT
-  while dropping phase-specific FORMAT tags by default
+- native `unphase_vcf` conversion of phased GT separators to unphased GT
+  while dropping phase-specific FORMAT tags by default on VCF, stdin VCF, BCF,
+  and BGZF VCF output paths
 - experimental Rust `--phase-from-bam` read-backed phasing on a tiny tracked
   BAM/BAI fixture before MNV construction, using the default exact
   single-sample MEC dynamic-programming algorithm
@@ -58,7 +37,7 @@ Behavior fixtures cover:
   BED-like codon-map fixture
 - native `phase_compare` switch-error, phase-match, and blockwise-Hamming stats
   on a tiny tracked truth/query fixture
-- Rust/C byte identity for supported synthetic cases
+- bindgen-backed fermi-lite FFI smoke coverage through `fermi_lite_assemble`
 
 ## Negative/failure-mode fixtures
 
@@ -66,7 +45,6 @@ Run:
 
 ```bash
 make negative-test
-make c-negative-test
 ```
 
 Negative fixtures and generated checks cover:
@@ -100,7 +78,7 @@ make compare-whatshap-phase
 
 The script compares two paths on the tracked tiny BAM/VCF fixture by default:
 
-1. unphase the input VCF with `scripts/unphase_vcf.py`;
+1. unphase the input VCF with the native `unphase_vcf` binary;
 2. run external `whatshap phase` on the unphased VCF and BAM to create the truth
    all-sites phased VCF;
 3. run Rust `phase_mnv_rs --emit all-sites --phase-from-bam` directly on the
@@ -117,19 +95,33 @@ tests/fixtures/ref.fa
 
 `phase_compare` reports exact shared variant records, common heterozygous sites,
 phased sites with PS in both files, intersection PS blocks, assessed adjacent
-pairs, phase-match pairs, switch errors, switch rate, and blockwise Hamming
-rate. The comparison is a phase/PS-block metric, not a generic variant-call
-matching metric.
+pairs, switch errors, switch rate, blockwise Hamming distance, and blockwise
+Hamming rate.
 
-The generated VCFs are passed through `scripts/sanitize_vcf_headers.py`, which
-removes `##bcftools_*` headers, producer command-line headers, and path-bearing
-`phase_mnv`/reference header records before comparison. This keeps local
-filesystem paths out of comparison VCFs.
+Important limitation: `phase_compare` is not a generic hap.py replacement. It is
+for exact-site phasing/block concordance after both paths have been normalized to
+the same input records. It does not perform variant representation matching,
+ROC/stratification, decompose/atomize, or truth-query callset scoring.
 
-The comparison script discovers `whatshap` from `PATH` first, then falls back to
-a micromamba environment named `phase-mnv-whatshap`.
+The comparison script accepts thresholds by environment variable:
 
-Relevant overrides:
+```bash
+MAX_SWITCH_ERRORS=0 MAX_SWITCH_RATE=0 make compare-whatshap-phase
+```
+
+For exploratory local runs where non-perfect concordance is expected:
+
+```bash
+ALLOW_NONPERFECT=1 KEEP_TMP=1 make compare-whatshap-phase
+```
+
+The script sanitizes generated VCF headers before comparison to remove command
+lines and local path-bearing records.
+
+## Local/private data policy
+
+Default tests must use tracked fixtures only. Larger validation runs should be
+launched with environment overrides, for example:
 
 ```bash
 WHATSHAP_BIN=whatshap make compare-whatshap-phase
@@ -137,47 +129,6 @@ WHATSHAP_ENV=my-whatshap-env make compare-whatshap-phase
 REF=ref.fa VCF=input.vcf.gz BAM=reads.bam SAMPLE=S1 ALLOW_NONPERFECT=1 make compare-whatshap-phase
 ```
 
-## Nirvana recomposition benchmark target
-
-Illumina Nirvana's MNV recomposition is a better benchmark than generic
-haplotype-comparison output when the target is codon/transcript-aware SNV
-recomposition. The reference clone helper includes Nirvana, but the repository
-is not vendored:
-
-```bash
-./scripts/clone_reference_impls.sh
-```
-
-The first implemented benchmark slice is `--mnv-algorithm nirvana-codon` (see
-`docs/nirvana_benchmark.md`), which uses a small BED-like codon map and emits
-SNV-only MNVs where two or more phased SNV observations share a transcript/codon
-key. For local GRCh37 experiments, build an ignored Ensembl-derived codon map
-with:
-
-```bash
-./scripts/download_grch37_codon_map.sh
-```
-
-For large real VCFs, prefer a map restricted to SNV positions in that VCF:
-
-```bash
-VCF=input.vcf.gz ./scripts/download_grch37_codon_map.sh
-```
-
-The broader intended benchmark scope remains Nirvana-like phase-set and
-homozygous-variant semantics, adjacent-codon aggregation,
-unsupported-overlap barriers, sample-specific multi-sample recomposition, and
-exact linkage/quality/filter behavior. Indel/complex recomposition remains a
-separate policy decision.
-
-## Normalization references
-
-The emitted `REF`/`ALT` records are normalized internally according to the
-left-aligned and parsimonious representation described by:
-
-> Tan A, Abecasis GR, Kang HM. Unified representation of genetic variants.
-> Bioinformatics. 2015;31(13):2202-2204. doi:10.1093/bioinformatics/btv112.
-
-`vt normalize` and `bcftools norm` remain useful external validators, but they
-are not phase-aware haplotype merging tools and are not required as a post-pass
-for supported outputs.
+Do not commit private paths, sample names, references, BAMs, or generated local
+outputs. Use ignored directories such as `local_runs/` or `resources/` for local
+experiments.

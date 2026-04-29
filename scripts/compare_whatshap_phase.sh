@@ -11,6 +11,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 phase_mnv_bin=${PHASE_MNV_BIN:-"$repo_root/target/release/phase_mnv_rs"}
 phase_compare_bin=${PHASE_COMPARE_BIN:-"$repo_root/target/release/phase_compare"}
+unphase_bin=${UNPHASE_BIN:-"$repo_root/target/release/unphase_vcf"}
 ref=${REF:-"$repo_root/tests/fixtures/ref.fa"}
 vcf=${VCF:-"$repo_root/tests/fixtures/read_phase.vcf"}
 bam=${BAM:-"$repo_root/tests/fixtures/read_phase.bam"}
@@ -34,6 +35,7 @@ the fast native phase_compare binary. No hap.py is used.
 Environment overrides:
   PHASE_MNV_BIN       phase_mnv_rs binary (default: target/release/phase_mnv_rs)
   PHASE_COMPARE_BIN   phase_compare binary (default: target/release/phase_compare)
+  UNPHASE_BIN         unphase_vcf binary (default: target/release/unphase_vcf)
   REF                 FASTA reference (default: tests/fixtures/ref.fa)
   VCF                 input VCF/VCF.GZ/BCF (default: tests/fixtures/read_phase.vcf)
   BAM                 indexed BAM/CRAM (default: tests/fixtures/read_phase.bam)
@@ -93,6 +95,7 @@ make_cmd() {
 
 require_file "$phase_mnv_bin"
 require_file "$phase_compare_bin"
+require_file "$unphase_bin"
 require_file "$ref"
 require_file "$vcf"
 require_file "$bam"
@@ -117,7 +120,7 @@ summary="$tmp/phase_compare.summary.tsv"
 switch_bed="$tmp/phase_compare.switches.bed"
 pair_tsv="$tmp/phase_compare.pairs.tsv"
 
-python3 "$repo_root/scripts/unphase_vcf.py" "$vcf" > "$unphased_vcf"
+"$unphase_bin" "$vcf" > "$unphased_vcf"
 
 "${whatshap_cmd[@]}" phase \
   --reference "$ref" \

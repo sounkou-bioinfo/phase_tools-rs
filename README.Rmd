@@ -6,7 +6,7 @@ knitr::opts_chunk$set(echo = FALSE, comment = "", collapse = TRUE)
 run_cmd <- function(cmd, args = character()) {
   if (!file.exists(cmd) && !nzchar(Sys.which(cmd))) {
     return(sprintf(
-      "%s not found. Run `make release` / `make c` before rendering README.md.",
+      "%s not found. Run `make release` before rendering README.md.",
       cmd
     ))
   }
@@ -24,7 +24,8 @@ run_tool <- function(cmd, args = "--help") {
 
 phase_mnv_rs <- file.path("target", "release", "phase_mnv_rs")
 phase_compare <- file.path("target", "release", "phase_compare")
-phase_mnv_c <- file.path("c", "phase_mnv")
+unphase_vcf <- file.path("target", "release", "unphase_vcf")
+fermi_lite_assemble <- file.path("target", "release", "fermi_lite_assemble")
 fixture_ref <- file.path("tests", "fixtures", "ref.fa")
 
 fence <- function(x) {
@@ -38,7 +39,7 @@ external_example <- function() {
     cat(paste(
       "Set `PHASE_MNV_EXAMPLE_VCF`, `PHASE_MNV_EXAMPLE_REF`, and",
       "`PHASE_MNV_EXAMPLE_SAMPLE`, then run `make readme-external-example`",
-      "to run a local larger VCF through both binaries.",
+      "to run a local larger VCF through the Rust binary.",
       "",
       "This is intentionally disabled in the committed README so no local/private",
       "paths or data names are embedded.",
@@ -65,7 +66,6 @@ external_example <- function() {
   dir.create(tmp)
   on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   rs_out <- file.path(tmp, "rust.vcf")
-  c_out <- file.path(tmp, "c.vcf")
 
   rs <- suppressWarnings(system2(
     phase_mnv_rs,
@@ -77,25 +77,10 @@ external_example <- function() {
     stop("Rust external README example failed: ", paste(rs, collapse = "\n"))
   }
 
-  cc <- suppressWarnings(system2(
-    phase_mnv_c,
-    c("-q", "-r", ref, "-s", sample, "-o", c_out, vcf),
-    stdout = TRUE,
-    stderr = TRUE
-  ))
-  if (!is.null(attr(cc, "status")) && attr(cc, "status") != 0) {
-    stop("C external README example failed: ", paste(cc, collapse = "\n"))
-  }
-
-  cmp <- suppressWarnings(system2("cmp", c(rs_out, c_out), stdout = TRUE, stderr = TRUE))
-  if (!is.null(attr(cmp, "status")) && attr(cmp, "status") != 0) {
-    stop("External README example Rust/C outputs differ")
-  }
-
   lines <- readLines(rs_out, warn = FALSE)
   n_records <- sum(!startsWith(lines, "#"))
   fence(paste(
-    "external VCF byte-identical Rust/C example passed",
+    "external VCF Rust example passed",
     sprintf("emitted_records=%d", n_records),
     sep = "\n"
   ))
@@ -112,10 +97,9 @@ on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
 | Area | Status |
 | --- | --- |
 | Default output | Derived MNV/COMPLEX records only (`--emit mnv`). |
-| Rust/C compatibility | Byte-identical for the supported non-BAM default MNV scope. |
-| Rust implementation | `src/main.rs`, built on `rust-htslib`. |
-| C reference | `c/phase_mnv.c`, kept for regression and byte-identity tests. |
-| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, and native phase comparison. |
+| Canonical implementation | Rust (`src/main.rs`), built on `rust-htslib`. |
+| Native dependencies | Vendored C libraries only when useful, exposed through generated/bindgen-backed FFI wrappers. |
+| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, native phase comparison, native VCF/BCF unphasing, and experimental fermi-lite local assembly bindings. |
 
 The Rust binary uses `rust-htslib` for VCF/BCF/BAM/CRAM APIs and only drops to
 `rust_htslib::htslib` where exact htslib behavior is needed. Rust-only features
@@ -138,12 +122,10 @@ target/release/phase_mnv_rs \
 Build or install variants:
 
 ```bash
-make install          # install target/release/phase_mnv_rs to ~/.local/bin
+make install          # install Rust CLIs to ~/.local/bin
 make static-release   # static Linux Rust binary when supported
 make install-static   # install static Linux binary when supported
-make c                # build the C/htslib reference
-make c-static         # C binary with bundled/static htslib where supported
-# cargo also builds target/release/phase_compare for fast phase-concordance stats
+# cargo also builds phase_compare, unphase_vcf, and fermi_lite_assemble
 ```
 
 Override the Rust target when needed:
@@ -158,10 +140,10 @@ make static-release STATIC_TARGET=x86_64-unknown-linux-gnu
 | Option | Meaning |
 | --- | --- |
 | `--emit mnv` | Default. Emit only derived `TYPE=MNV` / `TYPE=COMPLEX` records. |
-| `--emit all-sites` | Rust only. Preserve all input records/header and update `GT:PS` where phasing is available. Does not append MNV/COMPLEX records yet. |
-| `--mnv-algorithm proximity` | Default window/phase-set recomposition used for Rust/C byte-identity tests. |
-| `--mnv-algorithm nirvana-codon --codon-map codons.tsv` | Rust only. Initial SNV-only same-codon recomposition slice; not full Nirvana parity. |
-| `--phase-from-bam reads.bam` | Rust only. Experimental indexed BAM/CRAM-backed phasing before output. |
+| `--emit all-sites` | Preserve all input records/header and update `GT:PS` where phasing is available. Does not append MNV/COMPLEX records yet. |
+| `--mnv-algorithm proximity` | Default window/phase-set recomposition. |
+| `--mnv-algorithm nirvana-codon --codon-map codons.tsv` | Initial SNV-only same-codon recomposition slice; not full Nirvana parity. |
+| `--phase-from-bam reads.bam` | Experimental indexed BAM/CRAM-backed phasing before output. |
 
 The codon map is BED-like: `CHROM START0 END0 TRANSCRIPT CODON_ID`. In
 `nirvana-codon` mode, phased SNV observations are recomposed only when at least
@@ -226,10 +208,16 @@ fence(run_tool(file.path("target", "release", "phase_mnv_rs")))
 fence(run_tool(phase_compare))
 ```
 
-### C binary (`phase_mnv`)
+### Native unphasing helper (`unphase_vcf`)
 
-```{r c-help, results='asis'}
-fence(run_tool(phase_mnv_c))
+```{r unphase-help, results='asis'}
+fence(run_tool(unphase_vcf))
+```
+
+### fermi-lite smoke/utility binary (`fermi_lite_assemble`)
+
+```{r fermi-lite-help, results='asis'}
+fence(run_tool(fermi_lite_assemble))
 ```
 
 ## Examples
@@ -268,23 +256,6 @@ Output:
 fence(run_tool(
   phase_mnv_rs,
   c("-r", fixture_ref, "--no-header", "-q", file.path("tests", "fixtures", "complex.vcf"))
-))
-```
-
-### Rust/C byte-identity smoke test
-
-Command:
-
-```bash
-./tests/byte_identical_synthetic.sh target/release/phase_mnv_rs c/phase_mnv
-```
-
-Output:
-
-```{r example-byte-identity, results='asis'}
-fence(run_tool(
-  file.path("tests", "byte_identical_synthetic.sh"),
-  c(phase_mnv_rs, phase_mnv_c)
 ))
 ```
 
@@ -351,7 +322,7 @@ PREFIX.phase_mnv.log
 The unphasing step can also be run directly:
 
 ```bash
-python3 scripts/unphase_vcf.py input.vcf.gz | bgzip -c > input.unphased.vcf.gz
+target/release/unphase_vcf input.vcf.gz | bgzip -c > input.unphased.vcf.gz
 bcftools index -f input.unphased.vcf.gz
 ```
 
@@ -377,18 +348,12 @@ external_example()
 CI and default tests use only tracked fixtures under `tests/fixtures/`.
 
 ```bash
-make test                  # Rust behavior, output-format, bcftools norm, BAM phasing, phase_compare, and negative tests
-make c-test                # C behavior and negative tests
-make byte-test             # Rust/C byte identity on the public byte-identity fixture
+make test                  # Rust behavior, unphase_vcf, output-format, bcftools norm, BAM phasing, phase_compare, fermi-lite FFI, and negative tests
 make compare-whatshap-phase # optional WhatsHap truth path compared with native phase_compare
 ```
 
 For private or larger local datasets, pass paths from your shell; no private
-paths are embedded in the repository or rendered README:
-
-```bash
-VCF=input.vcf.gz REF=ref.fa SAMPLE=S1 make byte-test
-```
+paths are embedded in the repository or rendered README.
 
 ## README generation
 
@@ -399,8 +364,8 @@ outputs stay synchronized with the installed tools:
 make readme
 ```
 
-This requires R with the `knitr` package. The `readme` target builds both
-binaries first, then renders `README.Rmd`. For a local larger VCF example, set
+This requires R with the `knitr` package. The `readme` target builds the Rust
+CLIs first, then renders `README.Rmd`. For a local larger VCF example, set
 `PHASE_MNV_EXAMPLE_VCF`, `PHASE_MNV_EXAMPLE_REF`, and
 `PHASE_MNV_EXAMPLE_SAMPLE`, then run:
 
@@ -410,8 +375,10 @@ make readme-external-example
 
 ## Reference implementations
 
-Reference implementations are not vendored in this repository. Clone them when
-needed for comparison or compatibility work:
+Reference implementations for comparison/compatibility work are not vendored in
+this repository. Clone them when needed. The fermi-lite library is vendored
+separately under `vendor/fermi-lite` as an optional local assembly substrate,
+not as a phase/MNV reference implementation:
 
 ```bash
 ./scripts/clone_reference_impls.sh
@@ -446,6 +413,24 @@ Detailed semantics and validation notes are in:
 - [`docs/semantics.md`](docs/semantics.md)
 - [`docs/validation.md`](docs/validation.md)
 
+### Experimental fermi-lite local assembly binding
+
+The repository vendors fermi-lite source under `vendor/fermi-lite` and builds it
+through `build.rs` for future local read-evidence adjudication. Bindings are
+generated from `fml.h` with bindgen when libclang is available, with a checked-in
+narrow fallback for portability (`PHASE_MNV_REQUIRE_BINDGEN=1` forces bindgen).
+The fermi-lite wrapper is currently enabled on x86_64 targets because the
+vendored upstream `ksw.c` path requires SSE2. The current exposed Rust path is
+intentionally small: `src/fermi_lite.rs` wraps
+`fml_opt_init`, `fml_assemble`, and
+`fml_utg_destroy`, and
+`fermi_lite_assemble` is a smoke/utility binary for assembling supplied local
+read sequences into FASTA unitigs. It is not yet integrated into
+`phase_compare` or a final `phase_adjudicate` workflow.
+
+If you use fermi-lite-backed local assembly results, cite the FermiKit paper
+recommended by fermi-lite (Li 2015, Bioinformatics; doi:10.1093/bioinformatics/btv440).
+
 The most relevant upstream tools are:
 
 - `whatshap phase` / `whatshap haplotag` — established read-backed phasing
@@ -457,17 +442,18 @@ The most relevant upstream tools are:
 - `bcftools norm` — useful validator for emitted normalized records.
 - `Illumina Nirvana` — codon/transcript-aware SNV-only MNV recomposition
   reference for future benchmarking of annotation-driven recomposition rules.
+- `fermi-lite` / FermiKit — optional local reassembly substrate for future
+  read-evidence adjudication of difficult phasing disagreements.
 
 ## CI
 
-GitHub Actions builds and tests both implementations on Linux and macOS:
+GitHub Actions builds and tests the Rust project on Linux and macOS:
 
 - Rust release/static where supported
-- C binary with bundled static `libhts.a`
-- behavior and negative/failure-mode tests for both binaries
+- behavior and negative/failure-mode tests for the Rust binaries
 - Rust `bcftools norm` validation of emitted normalized records
-- byte-identical Rust-vs-C synthetic fixture test
 - Linux WhatsHap-derived all-sites phase comparison with native `phase_compare`
+- native `unphase_vcf` and fermi-lite FFI smoke coverage
 - binary artifact upload with SHA256 sums
 
 ## Notes

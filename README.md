@@ -9,10 +9,9 @@ on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
 | Area | Status |
 | --- | --- |
 | Default output | Derived MNV/COMPLEX records only (`--emit mnv`). |
-| Rust/C compatibility | Byte-identical for the supported non-BAM default MNV scope. |
-| Rust implementation | `src/main.rs`, built on `rust-htslib`. |
-| C reference | `c/phase_mnv.c`, kept for regression and byte-identity tests. |
-| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, and native phase comparison. |
+| Canonical implementation | Rust (`src/main.rs`), built on `rust-htslib`. |
+| Native dependencies | Vendored C libraries only when useful, exposed through generated/bindgen-backed FFI wrappers. |
+| Extra Rust modes | BCF/BGZF output, all-sites output, experimental BAM/CRAM phasing, codon-aware recomposition, native phase comparison, native VCF/BCF unphasing, and experimental fermi-lite local assembly bindings. |
 
 The Rust binary uses `rust-htslib` for VCF/BCF/BAM/CRAM APIs and only drops to
 `rust_htslib::htslib` where exact htslib behavior is needed. Rust-only features
@@ -35,12 +34,10 @@ target/release/phase_mnv_rs \
 Build or install variants:
 
 ```bash
-make install          # install target/release/phase_mnv_rs to ~/.local/bin
+make install          # install Rust CLIs to ~/.local/bin
 make static-release   # static Linux Rust binary when supported
 make install-static   # install static Linux binary when supported
-make c                # build the C/htslib reference
-make c-static         # C binary with bundled/static htslib where supported
-# cargo also builds target/release/phase_compare for fast phase-concordance stats
+# cargo also builds phase_compare, unphase_vcf, and fermi_lite_assemble
 ```
 
 Override the Rust target when needed:
@@ -55,10 +52,10 @@ make static-release STATIC_TARGET=x86_64-unknown-linux-gnu
 | Option | Meaning |
 | --- | --- |
 | `--emit mnv` | Default. Emit only derived `TYPE=MNV` / `TYPE=COMPLEX` records. |
-| `--emit all-sites` | Rust only. Preserve all input records/header and update `GT:PS` where phasing is available. Does not append MNV/COMPLEX records yet. |
-| `--mnv-algorithm proximity` | Default window/phase-set recomposition used for Rust/C byte-identity tests. |
-| `--mnv-algorithm nirvana-codon --codon-map codons.tsv` | Rust only. Initial SNV-only same-codon recomposition slice; not full Nirvana parity. |
-| `--phase-from-bam reads.bam` | Rust only. Experimental indexed BAM/CRAM-backed phasing before output. |
+| `--emit all-sites` | Preserve all input records/header and update `GT:PS` where phasing is available. Does not append MNV/COMPLEX records yet. |
+| `--mnv-algorithm proximity` | Default window/phase-set recomposition. |
+| `--mnv-algorithm nirvana-codon --codon-map codons.tsv` | Initial SNV-only same-codon recomposition slice; not full Nirvana parity. |
+| `--phase-from-bam reads.bam` | Experimental indexed BAM/CRAM-backed phasing before output. |
 
 The codon map is BED-like: `CHROM START0 END0 TRANSCRIPT CODON_ID`. In
 `nirvana-codon` mode, phased SNV observations are recomposed only when at least
@@ -223,51 +220,41 @@ options:
 Output is a TSV summary with per-contig rows and a final TOTAL row.
 ```
 
-### C binary (`phase_mnv`)
+### Native unphasing helper (`unphase_vcf`)
 
 ```text
-usage: phase_mnv -r ref.fa [options] input.vcf|input.bcf
+usage: unphase_vcf [options] input.vcf|input.vcf.gz|input.bcf|-
 
-Build minimal merged MNV/complex records from phased variants in one sample.
-
-required:
-  -r, --reference FILE   Indexed or indexable FASTA reference
+Write an unphased VCF stream from VCF/VCF.GZ/BCF input. GT separators are
+converted from phased to unphased, and FORMAT/PS plus FORMAT/PQ are removed
+by default. Other records, alleles, INFO fields, filters, and non-phase FORMAT
+values are preserved through htslib/rust-htslib.
 
 options:
-  -s, --sample NAME      Sample to read (default: first sample)
-  -o, --output FILE      Output VCF path (default: stdout; plain text)
-  -g, --max-gap N        Allow up to N unchanged reference bases between
-                        phased variants when building one merged call (default: 0)
-      --min-vars N       Minimum source variants per emitted call (default: 2)
-      --min-snvs N       Alias for --min-vars
-      --unsupported-alleles MODE
-                        Selected unsupported allele policy: skip or fail
-                        (default: skip)
-      --warn-on-n        Warn when a selected REF/ALT allele contains N
-      --no-ref-check     Do not fail when VCF REF differs from FASTA
-      --no-header        Suppress VCF header
-  -q, --quiet            Suppress summary on stderr
-  -h, --help             Show this help
+-o, --output FILE       Output VCF path; .gz/.bgz writes BGZF (default: stdout)
+--keep-phase-tags   Keep FORMAT/PS and FORMAT/PQ instead of removing them
+-@, --threads N         htslib threads for compressed input/output (default: 1)
+-h, --help              Show this help
+```
 
-Notes:
-  * Only phased diploid GT (e.g. 0|1, 1|0, 1|1, 1|2) is used.
-    Unphased, missing, and non-diploid genotypes are skipped.
-  * Multi-allelic input sites use the ALT allele selected by each
-    haplotype's GT allele index; unselected ALTs are ignored and output
-    remains biallelic. Example: GT 1|2 uses ALT1 on haplotype 1 and
-    ALT2 on haplotype 2.
-  * Symbolic, breakend, spanning-deletion '*', and non-DNA ALT alleles
-    are skipped by default and are currently not barriers; use
-    --unsupported-alleles fail to reject selected unsupported alleles.
-  * FORMAT/PS is honored when present; variants are only merged within the
-    same phase set. If PS is absent, the phase separator and proximity
-    define the merge block.
-  * With the default --max-gap 0, only adjacent phased variants are
-    merged. Pure SNV blocks are TYPE=MNV; blocks containing indels are
-    TYPE=COMPLEX.
-  * Unless --quiet is set, summary stats go to stderr and include
-    input/reference/output (output=stdout for VCF stdout), settings,
-    skip counts, unsupported categories, and N counts.
+### fermi-lite smoke/utility binary (`fermi_lite_assemble`)
+
+```text
+usage: fermi_lite_assemble [options] [--seq SEQ ...]
+
+Small fermi-lite FFI smoke/utility binary. With --seq, assembles the supplied
+sequences. Without --seq, reads one plain sequence per non-empty stdin line,
+ignoring FASTA-style header lines. This is intended for local adjudication
+experiments, not as a full fermi-lite CLI replacement.
+
+options:
+--seq SEQ              Add one input read/sequence
+-@, --threads N            fermi-lite threads (default: 1)
+--min-asm-ovlp N       minimum assembly overlap (default: 21)
+--min-count N          minimum k-mer count threshold (default: 1)
+--max-count N          maximum k-mer count threshold (default: 1000)
+--ec-k N               error-correction k; negative disables EC (default: -1)
+-h, --help                 Show this help
 ```
 
 ## Examples
@@ -303,20 +290,6 @@ Output:
 
 ```text
 chr1	2	.	C	TG	.	PASS	TYPE=COMPLEX;NVAR=2;NSNPS=1;END=2;SOURCE_POS=1,2;HAPS=1;PS=30	GT:PS	1|0:30
-```
-
-### Rust/C byte-identity smoke test
-
-Command:
-
-```bash
-./tests/byte_identical_synthetic.sh target/release/phase_mnv_rs c/phase_mnv
-```
-
-Output:
-
-```text
-Rust and C outputs are byte-identical on explicit fixture tests/fixtures/byte_identity.vcf
 ```
 
 ### Experimental Rust BAM-backed phasing before MNV construction
@@ -382,7 +355,7 @@ PREFIX.phase_mnv.log
 The unphasing step can also be run directly:
 
 ```bash
-python3 scripts/unphase_vcf.py input.vcf.gz | bgzip -c > input.unphased.vcf.gz
+target/release/unphase_vcf input.vcf.gz | bgzip -c > input.unphased.vcf.gz
 bcftools index -f input.unphased.vcf.gz
 ```
 
@@ -401,7 +374,7 @@ make readme-external-example
 
 Set `PHASE_MNV_EXAMPLE_VCF`, `PHASE_MNV_EXAMPLE_REF`, and
 `PHASE_MNV_EXAMPLE_SAMPLE`, then run `make readme-external-example`
-to run a local larger VCF through both binaries.
+to run a local larger VCF through the Rust binary.
 
 This is intentionally disabled in the committed README so no local/private
 paths or data names are embedded.
@@ -411,18 +384,12 @@ paths or data names are embedded.
 CI and default tests use only tracked fixtures under `tests/fixtures/`.
 
 ```bash
-make test                  # Rust behavior, output-format, bcftools norm, BAM phasing, phase_compare, and negative tests
-make c-test                # C behavior and negative tests
-make byte-test             # Rust/C byte identity on the public byte-identity fixture
+make test                  # Rust behavior, unphase_vcf, output-format, bcftools norm, BAM phasing, phase_compare, fermi-lite FFI, and negative tests
 make compare-whatshap-phase # optional WhatsHap truth path compared with native phase_compare
 ```
 
 For private or larger local datasets, pass paths from your shell; no private
-paths are embedded in the repository or rendered README:
-
-```bash
-VCF=input.vcf.gz REF=ref.fa SAMPLE=S1 make byte-test
-```
+paths are embedded in the repository or rendered README.
 
 ## README generation
 
@@ -433,8 +400,8 @@ outputs stay synchronized with the installed tools:
 make readme
 ```
 
-This requires R with the `knitr` package. The `readme` target builds both
-binaries first, then renders `README.Rmd`. For a local larger VCF example, set
+This requires R with the `knitr` package. The `readme` target builds the Rust
+CLIs first, then renders `README.Rmd`. For a local larger VCF example, set
 `PHASE_MNV_EXAMPLE_VCF`, `PHASE_MNV_EXAMPLE_REF`, and
 `PHASE_MNV_EXAMPLE_SAMPLE`, then run:
 
@@ -444,8 +411,10 @@ make readme-external-example
 
 ## Reference implementations
 
-Reference implementations are not vendored in this repository. Clone them when
-needed for comparison or compatibility work:
+Reference implementations for comparison/compatibility work are not vendored in
+this repository. Clone them when needed. The fermi-lite library is vendored
+separately under `vendor/fermi-lite` as an optional local assembly substrate,
+not as a phase/MNV reference implementation:
 
 ```bash
 ./scripts/clone_reference_impls.sh
@@ -480,6 +449,24 @@ Detailed semantics and validation notes are in:
 - [`docs/semantics.md`](docs/semantics.md)
 - [`docs/validation.md`](docs/validation.md)
 
+### Experimental fermi-lite local assembly binding
+
+The repository vendors fermi-lite source under `vendor/fermi-lite` and builds it
+through `build.rs` for future local read-evidence adjudication. Bindings are
+generated from `fml.h` with bindgen when libclang is available, with a checked-in
+narrow fallback for portability (`PHASE_MNV_REQUIRE_BINDGEN=1` forces bindgen).
+The fermi-lite wrapper is currently enabled on x86_64 targets because the
+vendored upstream `ksw.c` path requires SSE2. The current exposed Rust path is
+intentionally small: `src/fermi_lite.rs` wraps
+`fml_opt_init`, `fml_assemble`, and
+`fml_utg_destroy`, and
+`fermi_lite_assemble` is a smoke/utility binary for assembling supplied local
+read sequences into FASTA unitigs. It is not yet integrated into
+`phase_compare` or a final `phase_adjudicate` workflow.
+
+If you use fermi-lite-backed local assembly results, cite the FermiKit paper
+recommended by fermi-lite (Li 2015, Bioinformatics; doi:10.1093/bioinformatics/btv440).
+
 The most relevant upstream tools are:
 
 - `whatshap phase` / `whatshap haplotag` — established read-backed phasing
@@ -491,17 +478,18 @@ The most relevant upstream tools are:
 - `bcftools norm` — useful validator for emitted normalized records.
 - `Illumina Nirvana` — codon/transcript-aware SNV-only MNV recomposition
   reference for future benchmarking of annotation-driven recomposition rules.
+- `fermi-lite` / FermiKit — optional local reassembly substrate for future
+  read-evidence adjudication of difficult phasing disagreements.
 
 ## CI
 
-GitHub Actions builds and tests both implementations on Linux and macOS:
+GitHub Actions builds and tests the Rust project on Linux and macOS:
 
 - Rust release/static where supported
-- C binary with bundled static `libhts.a`
-- behavior and negative/failure-mode tests for both binaries
+- behavior and negative/failure-mode tests for the Rust binaries
 - Rust `bcftools norm` validation of emitted normalized records
-- byte-identical Rust-vs-C synthetic fixture test
 - Linux WhatsHap-derived all-sites phase comparison with native `phase_compare`
+- native `unphase_vcf` and fermi-lite FFI smoke coverage
 - binary artifact upload with SHA256 sums
 
 ## Notes

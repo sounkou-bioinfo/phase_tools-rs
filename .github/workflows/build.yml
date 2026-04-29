@@ -56,61 +56,51 @@ jobs:
             host=$(rustc -vV | sed -n 's/^host: //p')
             bin="target/${host}/release/phase_mnv_rs"
             phase_compare="target/${host}/release/phase_compare"
+            unphase="target/${host}/release/unphase_vcf"
+            fermi_lite="target/${host}/release/fermi_lite_assemble"
           else
             bin="target/release/phase_mnv_rs"
             phase_compare="target/release/phase_compare"
+            unphase="target/release/unphase_vcf"
+            fermi_lite="target/release/fermi_lite_assemble"
           fi
           test -x "$bin"
           test -x "$phase_compare"
+          test -x "$unphase"
+          test -x "$fermi_lite"
           echo "path=$bin" >> "$GITHUB_OUTPUT"
           echo "phase_compare=$phase_compare" >> "$GITHUB_OUTPUT"
-          file "$bin" "$phase_compare"
+          echo "unphase=$unphase" >> "$GITHUB_OUTPUT"
+          echo "fermi_lite=$fermi_lite" >> "$GITHUB_OUTPUT"
+          file "$bin" "$phase_compare" "$unphase" "$fermi_lite"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             ldd "$bin" || true
             ldd "$phase_compare" || true
+            ldd "$unphase" || true
+            ldd "$fermi_lite" || true
           else
             otool -L "$bin"
             otool -L "$phase_compare"
+            otool -L "$unphase"
+            otool -L "$fermi_lite"
           fi
 
       - name: Test Rust binary
         shell: bash
         run: |
+          ./tests/test_unphase_vcf.sh "${{ steps.rust-bin.outputs.unphase }}"
           ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_output_formats.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_bcftools_norm.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_all_sites.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_bam_phase.sh "${{ steps.rust-bin.outputs.path }}"
           ./tests/test_phase_compare.sh "${{ steps.rust-bin.outputs.phase_compare }}"
+          ./tests/test_fermi_lite.sh "${{ steps.rust-bin.outputs.fermi_lite }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
-
-      - name: Build C static/bundled-htslib binary
-        shell: bash
-        run: ./scripts/build_c_static.sh
-
-      - name: Inspect C binary
-        shell: bash
-        run: |
-          file c/phase_mnv
-          if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            ldd c/phase_mnv || true
-          else
-            otool -L c/phase_mnv
-          fi
-
-      - name: Test C binary
-        shell: bash
-        run: |
-          ./tests/test_phase_mnv.sh c/phase_mnv
-          ./tests/test_negative.sh c/phase_mnv
 
       - name: Check generated README is up to date
         shell: bash
         run: make check-readme
-
-      - name: Check Rust/C byte identity on synthetic fixture
-        shell: bash
-        run: ./tests/byte_identical_synthetic.sh "${{ steps.rust-bin.outputs.path }}" c/phase_mnv
 
       - name: Set up micromamba with WhatsHap
         if: runner.os == 'Linux'
@@ -137,7 +127,8 @@ jobs:
           suffix="$(printf '%s-%s' "$RUNNER_OS" "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
           cp "${{ steps.rust-bin.outputs.path }}" "dist-ci/phase_mnv_rs-${suffix}"
           cp "${{ steps.rust-bin.outputs.phase_compare }}" "dist-ci/phase_compare-${suffix}"
-          cp c/phase_mnv "dist-ci/phase_mnv_c-${suffix}"
+          cp "${{ steps.rust-bin.outputs.unphase }}" "dist-ci/unphase_vcf-${suffix}"
+          cp "${{ steps.rust-bin.outputs.fermi_lite }}" "dist-ci/fermi_lite_assemble-${suffix}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
           else

@@ -46,10 +46,10 @@ awk -F'\t' '$1=="TOTAL" {
       $17 != "0.500000" || $18 != 1 || $19 != "0.333333") exit 1
 }' "$tmp/summary.tsv"
 
-wc -l < "$tmp/switches.bed" | grep -qx '1'
+[[ $(awk 'END {print NR + 0}' "$tmp/switches.bed") == 1 ]]
 grep -qx $'chr1\t1\t3' "$tmp/switches.bed"
 
-wc -l < "$tmp/pairs.tsv" | grep -qx '3'
+[[ $(awk 'END {print NR + 0}' "$tmp/pairs.tsv") == 3 ]]
 grep -q $'chr1\t2\t3\t1\t1\t0\t1\tswitch' "$tmp/pairs.tsv"
 
 echo "phase_compare tests passed"

@@ -25,12 +25,6 @@ if grep -q -- "--mnv-algorithm MODE" "$help"; then
 fi
 grep -q "output=stdout for VCF stdout" "$help"
 
-python3 "$repo_root/scripts/unphase_vcf.py" "$fixtures/phased_mnv.vcf" > "$tmp/unphased.vcf"
-! grep -q '##FORMAT=<ID=PS,' "$tmp/unphased.vcf"
-grep -q $'\tGT\t0/1$' "$tmp/unphased.vcf"
-grep -q $'\tGT\t1/0$' "$tmp/unphased.vcf"
-grep -q $'\tGT\t1/1$' "$tmp/unphased.vcf"
-
 run_body() {
   local input=$1
   local output=$2
