@@ -56,9 +56,13 @@ validation against WhatsHap on real data, not byte identity with WhatsHap.
 `bam_error_model` is a separate helper for learning empirical mismatch,
 insertion, and deletion summaries from BAM/CRAM reads against a FASTA reference.
 It applies no MAPQ cutoff by default and reports MAPQ/base-quality bins rather
-than filtering on them. Known variant sites are not masked yet, so its mismatch
-rate should be treated as an error-plus-variation estimate unless callers
-restrict the input to high-confidence homozygous-reference regions.
+than filtering on them. It can also write an htsbox `mapchk`-inspired
+per-read-position TSV: positions are one-based from the original read 5' end
+(reverse-strand alignments are reversed), with all/low/high/unknown base-quality
+groups controlled by `--high-quality-threshold`. Known variant sites are not
+masked yet, so its mismatch rate should be treated as an error-plus-variation
+estimate unless callers restrict the input to high-confidence
+homozygous-reference regions.
 
 For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:

@@ -439,9 +439,13 @@ fermi-lite when `--fastq --ec-k 0` or another non-negative `--ec-k` is used.
 insertion, and deletion summaries from a BAM/CRAM versus a reference, without a
 MAPQ filter by default. It reports base-quality and MAPQ bins so a future
 `phase_adjudicate` path can separate local assembly from quality-aware evidence
-scoring. Known variant sites are not masked yet, so mismatch rates from this
-helper should be interpreted as sequencing-error-plus-variation unless regions
-are restricted to homozygous-reference/high-confidence sites.
+scoring. Its optional `--position-tsv` output is inspired by Heng Li's htsbox
+`mapchk`: rows are keyed by one-based read position from the read 5' end
+(reverse-strand alignments are reversed) and split into all/low/high/unknown
+base-quality groups using `--high-quality-threshold`. Known variant sites are
+not masked yet, so mismatch rates from this helper should be interpreted as
+sequencing-error-plus-variation unless regions are restricted to
+homozygous-reference/high-confidence sites.
 
 Neither helper is yet integrated into `phase_compare` or a final
 `phase_adjudicate` workflow.

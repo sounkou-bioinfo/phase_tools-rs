@@ -4,6 +4,8 @@ use rust_htslib::bam::{self, Read};
 use rust_htslib::htslib;
 use std::collections::BTreeMap;
 use std::ffi::CString;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 
 fn usage() -> &'static str {
     "usage: bam_error_model --reference ref.fa [options] reads.bam|reads.cram\n\n\
@@ -17,6 +19,8 @@ options:\n\
       --region REG          Restrict to region CHR:START-END (1-based, repeatable)\n\
       --max-reads N         Stop after N usable reads\n\
       --min-mapq N          Optional MAPQ cutoff (default: 0; no cutoff)\n\
+      --position-tsv FILE   Write per-read-position empirical error TSV\n\
+      --high-quality-threshold N  BaseQ threshold for high/low position groups (default: 20)\n\
       --include-duplicates  Include duplicate reads\n\
       --include-secondary   Include secondary alignments\n\
       --include-supplementary Include supplementary alignments\n\
@@ -30,6 +34,8 @@ struct Config {
     regions: Vec<Region>,
     max_reads: Option<u64>,
     min_mapq: u8,
+    position_tsv: Option<String>,
+    high_quality_threshold: u8,
     include_duplicates: bool,
     include_secondary: bool,
     include_supplementary: bool,
@@ -82,6 +88,15 @@ struct Model {
     overall: Stats,
     by_baseq: BTreeMap<String, Stats>,
     by_mapq: BTreeMap<String, Stats>,
+    by_read_pos: BTreeMap<usize, PositionStats>,
+}
+
+#[derive(Debug, Default)]
+struct PositionStats {
+    all: Stats,
+    low: Stats,
+    high: Stats,
+    unknown: Stats,
 }
 
 struct Fai(*mut htslib::faidx_t);
@@ -134,6 +149,8 @@ fn parse_args() -> Config {
     let mut regions = Vec::new();
     let mut max_reads = None;
     let mut min_mapq = 0u8;
+    let mut position_tsv = None;
+    let mut high_quality_threshold = 20u8;
     let mut include_duplicates = false;
     let mut include_secondary = false;
     let mut include_supplementary = false;
@@ -178,6 +195,24 @@ fn parse_args() -> Config {
                 }
                 min_mapq = n as u8;
             }
+            "--position-tsv" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--position-tsv requires an argument");
+                }
+                position_tsv = Some(args[i].clone());
+            }
+            "--high-quality-threshold" => {
+                i += 1;
+                if i >= args.len() {
+                    die("--high-quality-threshold requires an argument");
+                }
+                let n = parse_i64(&args[i], "--high-quality-threshold");
+                if !(0..=255).contains(&n) {
+                    die("--high-quality-threshold must be between 0 and 255");
+                }
+                high_quality_threshold = n as u8;
+            }
             "--include-duplicates" => include_duplicates = true,
             "--include-secondary" => include_secondary = true,
             "--include-supplementary" => include_supplementary = true,
@@ -197,6 +232,8 @@ fn parse_args() -> Config {
         regions,
         max_reads,
         min_mapq,
+        position_tsv,
+        high_quality_threshold,
         include_duplicates,
         include_secondary,
         include_supplementary,
@@ -289,51 +326,75 @@ fn usable_record(record: &bam::Record, cfg: &Config) -> bool {
         && (cfg.include_supplementary || !record.is_supplementary())
 }
 
-fn add_match_or_mismatch(model: &mut Model, mapq_key: &str, baseq: u8, is_match: bool) {
-    if is_match {
-        model.overall.add_match();
-        model
-            .by_mapq
-            .entry(mapq_key.to_string())
-            .or_default()
-            .add_match();
-        model.by_baseq.entry(q_bin(baseq)).or_default().add_match();
-    } else {
-        model.overall.add_mismatch();
-        model
-            .by_mapq
-            .entry(mapq_key.to_string())
-            .or_default()
-            .add_mismatch();
-        model
-            .by_baseq
-            .entry(q_bin(baseq))
-            .or_default()
-            .add_mismatch();
+#[derive(Debug, Clone, Copy)]
+enum EventKind {
+    Match,
+    Mismatch,
+    Insertion,
+    Deletion,
+}
+
+fn add_to_stats(stats: &mut Stats, event: EventKind) {
+    match event {
+        EventKind::Match => stats.add_match(),
+        EventKind::Mismatch => stats.add_mismatch(),
+        EventKind::Insertion => stats.add_insertion(),
+        EventKind::Deletion => stats.add_deletion(),
     }
 }
 
-fn add_insertion(model: &mut Model, mapq_key: &str, baseq: u8) {
-    model.overall.add_insertion();
-    model
-        .by_mapq
-        .entry(mapq_key.to_string())
-        .or_default()
-        .add_insertion();
-    model
-        .by_baseq
-        .entry(q_bin(baseq))
-        .or_default()
-        .add_insertion();
+fn read_pos_5prime(record: &bam::Record, read_pos0: usize) -> usize {
+    if record.is_reverse() {
+        record.seq_len().saturating_sub(read_pos0)
+    } else {
+        read_pos0 + 1
+    }
 }
 
-fn add_deletion(model: &mut Model, mapq_key: &str) {
-    model.overall.add_deletion();
-    model
-        .by_mapq
-        .entry(mapq_key.to_string())
-        .or_default()
-        .add_deletion();
+fn add_position_event(
+    model: &mut Model,
+    read_pos: Option<usize>,
+    baseq: Option<u8>,
+    high_quality_threshold: u8,
+    event: EventKind,
+) {
+    let Some(read_pos) = read_pos else {
+        return;
+    };
+    let pos_stats = model.by_read_pos.entry(read_pos).or_default();
+    add_to_stats(&mut pos_stats.all, event);
+    let grouped = match baseq {
+        Some(255) | None => &mut pos_stats.unknown,
+        Some(q) if q >= high_quality_threshold => &mut pos_stats.high,
+        Some(_) => &mut pos_stats.low,
+    };
+    add_to_stats(grouped, event);
+}
+
+fn add_event(
+    model: &mut Model,
+    mapq_key: &str,
+    baseq_for_summary: Option<u8>,
+    baseq_for_position: Option<u8>,
+    read_pos: Option<usize>,
+    high_quality_threshold: u8,
+    event: EventKind,
+) {
+    add_to_stats(&mut model.overall, event);
+    add_to_stats(
+        model.by_mapq.entry(mapq_key.to_string()).or_default(),
+        event,
+    );
+    if let Some(q) = baseq_for_summary {
+        add_to_stats(model.by_baseq.entry(q_bin(q)).or_default(), event);
+    }
+    add_position_event(
+        model,
+        read_pos,
+        baseq_for_position,
+        high_quality_threshold,
+        event,
+    );
 }
 
 fn in_clip(pos0: i64, clips: Option<&[(i64, i64)]>) -> bool {
@@ -381,7 +442,19 @@ fn process_record(
                             let fb = ref_seq[ref_idx];
                             if in_clip(ref_pos, clips) && is_acgt(rb) && is_acgt(fb) {
                                 let q = qual.get(read_pos).copied().unwrap_or(255);
-                                add_match_or_mismatch(model, &mapq_key, q, rb == fb);
+                                add_event(
+                                    model,
+                                    &mapq_key,
+                                    Some(q),
+                                    Some(q),
+                                    Some(read_pos_5prime(record, read_pos)),
+                                    cfg.high_quality_threshold,
+                                    if rb == fb {
+                                        EventKind::Match
+                                    } else {
+                                        EventKind::Mismatch
+                                    },
+                                );
                             }
                         }
                     }
@@ -397,16 +470,42 @@ fn process_record(
                         let rb = seq[read_pos].to_ascii_uppercase();
                         if is_acgt(rb) {
                             let q = qual.get(read_pos).copied().unwrap_or(255);
-                            add_insertion(model, &mapq_key, q);
+                            add_event(
+                                model,
+                                &mapq_key,
+                                Some(q),
+                                Some(q),
+                                Some(read_pos_5prime(record, read_pos)),
+                                cfg.high_quality_threshold,
+                                EventKind::Insertion,
+                            );
                         }
                     }
                     read_pos += 1;
                 }
             }
             Cigar::Del(len) => {
+                let anchor_read_pos = if read_pos > 0 {
+                    Some(read_pos - 1)
+                } else if read_pos < record.seq_len() {
+                    Some(read_pos)
+                } else {
+                    None
+                };
+                let anchor_baseq = anchor_read_pos.and_then(|pos| qual.get(pos).copied());
+                let anchor_read_pos_5prime =
+                    anchor_read_pos.map(|pos| read_pos_5prime(record, pos));
                 for _ in 0..len {
                     if in_clip(ref_pos, clips) {
-                        add_deletion(model, &mapq_key);
+                        add_event(
+                            model,
+                            &mapq_key,
+                            None,
+                            anchor_baseq,
+                            anchor_read_pos_5prime,
+                            cfg.high_quality_threshold,
+                            EventKind::Deletion,
+                        );
                     }
                     last_ref_pos = Some(ref_pos);
                     ref_pos += 1;
@@ -471,6 +570,57 @@ fn print_model(model: &Model) {
     for (bin, stats) in &model.by_mapq {
         print_row("mapq", bin, stats);
     }
+}
+
+fn write_position_row<W: Write>(
+    writer: &mut W,
+    read_pos: usize,
+    baseq_group: &str,
+    stats: &Stats,
+) -> Result<(), String> {
+    writeln!(
+        writer,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        read_pos,
+        baseq_group,
+        stats.observations(),
+        stats.matches,
+        stats.mismatches,
+        stats.insertions,
+        stats.deletions,
+        error_rate(stats),
+        empirical_q(stats)
+    )
+    .map_err(|e| format!("failed to write position TSV: {e}"))
+}
+
+fn maybe_write_position_model(model: &Model, path: &Option<String>) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let file = File::create(path).map_err(|e| format!("failed to create '{path}': {e}"))?;
+    let mut writer = BufWriter::new(file);
+    writeln!(
+        writer,
+        "read_pos\tbaseq_group\tobservations\tmatches\tmismatches\tinsertions\tdeletions\terror_rate\tempirical_q"
+    )
+    .map_err(|e| format!("failed to write position TSV header: {e}"))?;
+    for (read_pos, stats) in &model.by_read_pos {
+        write_position_row(&mut writer, *read_pos, "all", &stats.all)?;
+        if stats.low.observations() > 0 {
+            write_position_row(&mut writer, *read_pos, "low", &stats.low)?;
+        }
+        if stats.high.observations() > 0 {
+            write_position_row(&mut writer, *read_pos, "high", &stats.high)?;
+        }
+        if stats.unknown.observations() > 0 {
+            write_position_row(&mut writer, *read_pos, "unknown", &stats.unknown)?;
+        }
+    }
+    writer
+        .flush()
+        .map_err(|e| format!("failed to flush position TSV '{path}': {e}"))?;
+    Ok(())
 }
 
 fn run_stream(cfg: &Config, fai: &Fai, model: &mut Model) -> Result<(), String> {
@@ -582,6 +732,7 @@ fn run() -> Result<(), String> {
         run_regions(&cfg, &fai, &mut model)?;
     }
     print_model(&model);
+    maybe_write_position_model(&model, &cfg.position_tsv)?;
     Ok(())
 }
 

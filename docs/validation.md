@@ -39,8 +39,8 @@ Behavior fixtures cover:
   on a tiny tracked truth/query fixture
 - bindgen-backed fermi-lite FFI smoke coverage through `fermi_lite_assemble`,
   including FASTQ/base-quality passthrough
-- empirical BAM error-model summary coverage through `bam_error_model` on the
-  tracked BAM fixture, with no MAPQ filter by default
+- empirical BAM error-model summary and per-read-position TSV coverage through
+  `bam_error_model` on the tracked BAM fixture, with no MAPQ filter by default
 
 ## Negative/failure-mode fixtures
 
