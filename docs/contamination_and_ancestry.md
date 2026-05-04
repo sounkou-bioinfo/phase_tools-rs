@@ -109,12 +109,17 @@ Suggested columns:
 chrom  pos  ref  alt  AFR  EUR  EAS  SAS  AMR/IAM ...
 ```
 
-Possible tools:
+Current and possible tools:
 
-- `ancestry_mix`: estimate sample/panel ancestry proportions from observed AFs
-  and tabix-indexed reference frequencies.
-- `ancestry_adjust_af`: apply Summix-style ancestry adjustment to external
-  control AFs for a requested target ancestry mixture.
+- `bam_ancestry`: experimental BAM/CRAM ancestry mixture probe. It counts
+  REF/ALT bases at ancestry-informative SNV anchors and fits non-negative
+  reference-population mixture proportions from observed ALT fractions. Anchor
+  TSV columns are `chrom pos ref alt POP1 POP2 ...`; population columns are ALT
+  frequencies and can be selected with `--populations`.
+- `ancestry_mix`: future summary-table estimator for sample/panel ancestry
+  proportions from observed AFs and tabix-indexed reference frequencies.
+- `ancestry_adjust_af`: future helper to apply Summix-style ancestry adjustment
+  to external control AFs for a requested target ancestry mixture.
 
 For HLA typing, genome-wide ancestry estimates are often more stable than local
 HLA-only estimates. Local ancestry around HLA may differ from genome-wide

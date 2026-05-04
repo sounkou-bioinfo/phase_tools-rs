@@ -49,6 +49,9 @@ Behavior fixtures cover:
   tracked BAM fixtures, including homozygous-alt reference infiltration,
   optional CHARR-like allele-frequency adjustment, explicit baseQ filtering, and
   unsupported genotype rejection
+- experimental `bam_ancestry` Summix-style ancestry mixture probe coverage on
+  tracked BAM fixtures, including population-column ordering, FASTA REF
+  validation, explicit baseQ filtering, and no-observation failure behavior
 
 ## Negative/failure-mode fixtures
 

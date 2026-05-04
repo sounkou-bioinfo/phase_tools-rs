@@ -89,6 +89,14 @@ component when `ref_af` is supplied. It is not a complete CHARR or VerifyBamID
 replacement. For HLA-only assays, interpret results cautiously unless independent
 contamination anchors are included outside the highly polymorphic HLA interval.
 
+`bam_ancestry` is an experimental Summix-style BAM/CRAM ancestry mixture probe.
+It counts REF/ALT bases at caller-provided ancestry-informative SNV anchors,
+uses the observed ALT fraction at anchors with enough read support, and fits a
+non-negative least-squares mixture over reference population ALT-frequency
+columns. It validates TSV REF bases against the supplied FASTA and applies no
+MAPQ/baseQ cutoff by default. This is a lightweight probe, not a full Summix
+replacement and not a local-ancestry caller.
+
 For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:
 

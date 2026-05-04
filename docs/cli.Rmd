@@ -30,6 +30,7 @@ fermi_lite_assemble <- file.path("target", "release", "fermi_lite_assemble")
 bam_error_model <- file.path("target", "release", "bam_error_model")
 phase_adjudicate <- file.path("target", "release", "phase_adjudicate")
 bam_contamination <- file.path("target", "release", "bam_contamination")
+bam_ancestry <- file.path("target", "release", "bam_ancestry")
 
 fence <- function(x) {
   cat("```text\n")
@@ -81,4 +82,10 @@ fence(run_tool(phase_adjudicate))
 
 ```{r bam-contamination-help, results='asis'}
 fence(run_tool(bam_contamination))
+```
+
+## `bam_ancestry`
+
+```{r bam-ancestry-help, results='asis'}
+fence(run_tool(bam_ancestry))
 ```

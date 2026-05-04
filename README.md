@@ -20,6 +20,7 @@ experimental unless a document explicitly says otherwise.
 | `bam_error_model` | Summarize empirical mismatch/insertion/deletion patterns from BAM/CRAM vs FASTA. |
 | `phase_adjudicate` | Initial read-evidence adjudication for `phase_compare --pair-tsv` SNV pairs. |
 | `bam_contamination` | Experimental anchor-site contamination probe from BAM/CRAM plus TSV/VCF/BCF anchors. |
+| `bam_ancestry` | Experimental Summix-style ancestry mixture probe from BAM/CRAM plus population-AF anchors. |
 | `fermi_lite_assemble` | Small fermi-lite FFI smoke/utility binary for local assembly experiments. |
 
 Full generated CLI help lives in [`docs/cli.md`](docs/cli.md).
@@ -62,12 +63,23 @@ chr1	4	.	TA	CG	.	PASS	TYPE=MNV;NVAR=2;NSNPS=2;END=5;SOURCE_POS=4,5;HAPS=1;PS=10	
 chr1	6	.	CG	AT	.	PASS	TYPE=MNV;NVAR=2;NSNPS=2;END=7;SOURCE_POS=6,7;HAPS=1,2;PS=20	GT:PS	1|1:20
 ```
 
-## BAM-backed and contamination helpers
+## BAM-backed examples and helpers
 
 `--phase-from-bam` performs experimental Rust read-backed phasing before MNV
 construction. The default `--phase-algorithm mec` solves an exact diploid
 single-sample MEC objective per connected component after deterministic read
 selection; use WhatsHap itself when established WhatsHap behavior is required.
+
+`bam_error_model` estimates error-plus-variation unless you restrict to trusted
+homozygous-reference sites or use its optional site guard:
+
+```bash
+target/release/bam_error_model \
+  --reference tests/fixtures/ref.fa \
+  --position-tsv read_pos.tsv \
+  --event-tsv events.tsv \
+  tests/fixtures/read_phase.bam
+```
 
 `bam_contamination` accepts headered TSV anchors (`chrom,pos,ref,alt,gt[,ref_af]`)
 or VCF/VCF.GZ/VCF.BGZ/BCF anchors with sample `GT`. VCF `INFO/REF_AF` is used
@@ -76,18 +88,22 @@ ALT frequency and converted to `ref_af = 1 - AF`. Anchor REF bases are validated
 against the supplied FASTA. No MAPQ/baseQ filter is applied by default; optional
 thresholds must be explicit.
 
+`bam_ancestry` is an experimental Summix-style helper. It counts REF/ALT bases at
+ancestry-informative anchors, estimates observed ALT fractions, and fits a
+non-negative mixture over reference population ALT frequencies:
+
+```bash
+target/release/bam_ancestry \
+  --reference ref.fa \
+  --bam reads.bam \
+  --anchors ancestry_anchors.tsv \
+  --populations AFR,EUR,EAS,SAS,AMR
+```
+
 For targeted HLA/HLA-DRB1 exon 2 assays, treat contamination estimates as anchor
 probes rather than definitive sample-wide estimates unless the assay includes
 independent contamination markers outside the highly polymorphic HLA interval.
 See [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md).
-
-## Documentation
-
-- [`docs/cli.md`](docs/cli.md) — generated full CLI help.
-- [`docs/semantics.md`](docs/semantics.md) — variant, phasing, and helper semantics.
-- [`docs/validation.md`](docs/validation.md) — tracked validation strategy.
-- [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md) — contamination/HLA/ancestry notes.
-- [`docs/nirvana_benchmark.md`](docs/nirvana_benchmark.md) — Nirvana-style codon benchmark notes.
 
 ## Citations
 
@@ -127,3 +143,11 @@ private/larger paths from your shell rather than committing them.
 
 MIT. The fermi-lite source under `vendor/fermi-lite` carries its upstream
 license and is used as an optional local assembly substrate.
+
+## Documentation
+
+- [`docs/cli.md`](docs/cli.md) — generated full CLI help.
+- [`docs/semantics.md`](docs/semantics.md) — variant, phasing, and helper semantics.
+- [`docs/validation.md`](docs/validation.md) — tracked validation strategy.
+- [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md) — contamination/HLA/ancestry notes.
+- [`docs/nirvana_benchmark.md`](docs/nirvana_benchmark.md) — Nirvana-style codon benchmark notes.

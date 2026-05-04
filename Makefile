@@ -11,6 +11,7 @@ FERMI_LITE_BIN ?= target/release/fermi_lite_assemble
 BAM_ERROR_MODEL_BIN ?= target/release/bam_error_model
 PHASE_ADJUDICATE_BIN ?= target/release/phase_adjudicate
 BAM_CONTAMINATION_BIN ?= target/release/bam_contamination
+BAM_ANCESTRY_BIN ?= target/release/bam_ancestry
 STATIC_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_mnv_rs
 STATIC_PHASE_COMPARE_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_compare
 STATIC_UNPHASE_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/unphase_vcf
@@ -18,6 +19,7 @@ STATIC_FERMI_LITE_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/re
 STATIC_BAM_ERROR_MODEL_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/bam_error_model
 STATIC_PHASE_ADJUDICATE_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/phase_adjudicate
 STATIC_BAM_CONTAMINATION_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/bam_contamination
+STATIC_BAM_ANCESTRY_BIN ?= target/$(shell $(CARGO) -vV | sed -n 's/^host: //p')/release/bam_ancestry
 
 .PHONY: release static-release install install-static clean test negative-test compare-whatshap-phase readme readme-external-example check-readme
 
@@ -36,6 +38,7 @@ install: release
 	$(INSTALL) -m 0755 $(BAM_ERROR_MODEL_BIN) $(BINDIR)/bam_error_model
 	$(INSTALL) -m 0755 $(PHASE_ADJUDICATE_BIN) $(BINDIR)/phase_adjudicate
 	$(INSTALL) -m 0755 $(BAM_CONTAMINATION_BIN) $(BINDIR)/bam_contamination
+	$(INSTALL) -m 0755 $(BAM_ANCESTRY_BIN) $(BINDIR)/bam_ancestry
 
 install-static: static-release
 	$(INSTALL) -d $(BINDIR)
@@ -46,6 +49,7 @@ install-static: static-release
 	$(INSTALL) -m 0755 $(STATIC_BAM_ERROR_MODEL_BIN) $(BINDIR)/bam_error_model
 	$(INSTALL) -m 0755 $(STATIC_PHASE_ADJUDICATE_BIN) $(BINDIR)/phase_adjudicate
 	$(INSTALL) -m 0755 $(STATIC_BAM_CONTAMINATION_BIN) $(BINDIR)/bam_contamination
+	$(INSTALL) -m 0755 $(STATIC_BAM_ANCESTRY_BIN) $(BINDIR)/bam_ancestry
 
 clean:
 	$(CARGO) clean
@@ -62,6 +66,7 @@ test: release
 	./tests/test_bam_error_model.sh $(BAM_ERROR_MODEL_BIN)
 	./tests/test_phase_adjudicate.sh $(PHASE_ADJUDICATE_BIN)
 	./tests/test_bam_contamination.sh $(BAM_CONTAMINATION_BIN)
+	./tests/test_bam_ancestry.sh $(BAM_ANCESTRY_BIN)
 	./tests/test_negative.sh $(RELEASE_BIN)
 
 negative-test: release

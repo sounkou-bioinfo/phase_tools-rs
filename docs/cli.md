@@ -239,3 +239,36 @@ options:
 --include-supplementary Include supplementary alignments
 -h, --help                 Show this help
 ```
+
+## `bam_ancestry`
+
+```text
+usage: bam_ancestry --reference ref.fa --bam reads.bam --anchors ancestry.tsv [options]
+
+Experimental BAM/CRAM ancestry mixture probe. It counts REF/ALT bases at
+caller-supplied ancestry-informative SNV anchors, estimates observed ALT
+fractions, and fits a constrained least-squares mixture over reference
+population ALT frequencies. It applies no MAPQ/baseQ filter by default;
+optional thresholds are explicit. This is Summix-style in spirit, but it is not
+a full Summix replacement.
+
+Anchor TSV requires a header with columns: chrom, pos, ref, alt, then reference
+population ALT-frequency columns. Positions are 1-based. Use --populations to
+select/order population columns; otherwise all columns after alt are used. REF
+alleles are validated against the supplied FASTA.
+
+options:
+-r, --reference FILE       Required FASTA reference (REF validation; CRAM decoding)
+--bam FILE             Indexed BAM/CRAM read evidence
+--anchors FILE         Anchor TSV with chrom,pos,ref,alt,popAF...
+--populations LIST     Comma-separated population columns to use
+-o, --output FILE          Output TSV (default: stdout)
+-@, --threads N            htslib reader threads (default: 1)
+--min-mapq N           Optional MAPQ cutoff (default: 0; no cutoff)
+--min-baseq N          Optional baseQ cutoff (default: 0; no cutoff)
+--min-observations N   Minimum REF+ALT observations for fitting (default: 1)
+--include-duplicates   Include duplicate reads
+--include-secondary    Include secondary alignments
+--include-supplementary Include supplementary alignments
+-h, --help                 Show this help
+```

@@ -61,6 +61,7 @@ jobs:
             bam_error_model="target/${host}/release/bam_error_model"
             phase_adjudicate="target/${host}/release/phase_adjudicate"
             bam_contamination="target/${host}/release/bam_contamination"
+            bam_ancestry="target/${host}/release/bam_ancestry"
           else
             bin="target/release/phase_mnv_rs"
             phase_compare="target/release/phase_compare"
@@ -69,6 +70,7 @@ jobs:
             bam_error_model="target/release/bam_error_model"
             phase_adjudicate="target/release/phase_adjudicate"
             bam_contamination="target/release/bam_contamination"
+            bam_ancestry="target/release/bam_ancestry"
           fi
           test -x "$bin"
           test -x "$phase_compare"
@@ -77,6 +79,7 @@ jobs:
           test -x "$bam_error_model"
           test -x "$phase_adjudicate"
           test -x "$bam_contamination"
+          test -x "$bam_ancestry"
           echo "path=$bin" >> "$GITHUB_OUTPUT"
           echo "phase_compare=$phase_compare" >> "$GITHUB_OUTPUT"
           echo "unphase=$unphase" >> "$GITHUB_OUTPUT"
@@ -84,7 +87,8 @@ jobs:
           echo "bam_error_model=$bam_error_model" >> "$GITHUB_OUTPUT"
           echo "phase_adjudicate=$phase_adjudicate" >> "$GITHUB_OUTPUT"
           echo "bam_contamination=$bam_contamination" >> "$GITHUB_OUTPUT"
-          file "$bin" "$phase_compare" "$unphase" "$fermi_lite" "$bam_error_model" "$phase_adjudicate" "$bam_contamination"
+          echo "bam_ancestry=$bam_ancestry" >> "$GITHUB_OUTPUT"
+          file "$bin" "$phase_compare" "$unphase" "$fermi_lite" "$bam_error_model" "$phase_adjudicate" "$bam_contamination" "$bam_ancestry"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             ldd "$bin" || true
             ldd "$phase_compare" || true
@@ -93,6 +97,7 @@ jobs:
             ldd "$bam_error_model" || true
             ldd "$phase_adjudicate" || true
             ldd "$bam_contamination" || true
+            ldd "$bam_ancestry" || true
           else
             otool -L "$bin"
             otool -L "$phase_compare"
@@ -101,6 +106,7 @@ jobs:
             otool -L "$bam_error_model"
             otool -L "$phase_adjudicate"
             otool -L "$bam_contamination"
+            otool -L "$bam_ancestry"
           fi
 
       - name: Test Rust binary
@@ -117,6 +123,7 @@ jobs:
           ./tests/test_bam_error_model.sh "${{ steps.rust-bin.outputs.bam_error_model }}"
           ./tests/test_phase_adjudicate.sh "${{ steps.rust-bin.outputs.phase_adjudicate }}"
           ./tests/test_bam_contamination.sh "${{ steps.rust-bin.outputs.bam_contamination }}"
+          ./tests/test_bam_ancestry.sh "${{ steps.rust-bin.outputs.bam_ancestry }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
 
       - name: Check generated README is up to date
@@ -153,6 +160,7 @@ jobs:
           cp "${{ steps.rust-bin.outputs.bam_error_model }}" "dist-ci/bam_error_model-${suffix}"
           cp "${{ steps.rust-bin.outputs.phase_adjudicate }}" "dist-ci/phase_adjudicate-${suffix}"
           cp "${{ steps.rust-bin.outputs.bam_contamination }}" "dist-ci/bam_contamination-${suffix}"
+          cp "${{ steps.rust-bin.outputs.bam_ancestry }}" "dist-ci/bam_ancestry-${suffix}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
           else
