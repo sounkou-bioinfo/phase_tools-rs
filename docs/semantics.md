@@ -1,7 +1,7 @@
 # Variant semantics
 
 This document defines the currently supported semantics for the Rust-only
-`phase_mnv_rs` implementation.
+`phase_tools-rs` toolkit and its `phase_mnv_rs` MNV-construction binary.
 
 ## Input model
 
@@ -81,6 +81,13 @@ phased GT patterns in the pair TSV. MAPQ and baseQ are summarized and optional
 thresholds default to zero, so there is no default hard MAPQ/baseQ exclusion.
 The current scope is deliberately narrow: SNV pairs only, no local assembly, and
 no empirical-error weighting yet.
+
+`bam_contamination` is an experimental anchor-site contamination probe. It counts
+REF/ALT/other read bases at caller-provided biallelic anchors, summarizes raw
+reference infiltration at homozygous-alt anchors, and emits a simple CHARR-like
+component when `ref_af` is supplied. It is not a complete CHARR or VerifyBamID
+replacement. For HLA-only assays, interpret results cautiously unless independent
+contamination anchors are included outside the highly polymorphic HLA interval.
 
 For comparison against the established upstream phaser,
 `scripts/phase_from_bam_then_mnv.sh` provides a local workflow that:

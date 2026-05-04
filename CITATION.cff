@@ -1,17 +1,19 @@
 cff-version: 1.2.0
 message: >-
-  If you use phase_mnv_rs, please cite this software and explicitly cite the
+  If you use phase_tools-rs, please cite this software and explicitly cite the
   upstream methods matching your workflow: Tan, Abecasis, and Kang (2015) for
   left-aligned + parsimonious normalization, the appropriate WhatsHap paper for
-  WhatsHap-based or WhatsHap-inspired read-backed phasing, and Li (2015) for
-  fermi-lite/FermiKit-backed local assembly.
-title: phase_mnv_rs
+  WhatsHap-based or WhatsHap-inspired read-backed phasing, Li (2015) for
+  fermi-lite/FermiKit-backed local assembly, Lu et al. (2023) for CHARR-style
+  contamination concepts, and Arriaga-MacKenzie et al. (2021) for Summix-style
+  summary-allele-frequency ancestry deconvolution.
+title: phase_tools-rs
 type: software
 authors:
   - family-names: Toure
     given-names: Sounkou
     email: sounkoutoure@gmail.com
-repository-code: https://github.com/sounkou-bioinfo/phase_mnv_rs
+repository-code: https://github.com/sounkou-bioinfo/phase_tools-rs
 license: MIT
 version: 0.1.0
 references:
@@ -68,6 +70,40 @@ references:
     end: 3696
     doi: 10.1093/bioinformatics/btv440
     url: https://doi.org/10.1093/bioinformatics/btv440
+  - type: article
+    title: CHARR efficiently estimates contamination from DNA sequencing data
+    authors:
+      - family-names: Lu
+        given-names: Wenhan
+      - family-names: Gauthier
+        given-names: Laura D.
+      - family-names: Poterba
+        given-names: Timothy
+      - family-names: Karczewski
+        given-names: Konrad J.
+    journal: The American Journal of Human Genetics
+    year: 2023
+    volume: 110
+    issue: 12
+    start: 2068
+    end: 2076
+    doi: 10.1016/j.ajhg.2023.10.011
+    url: https://doi.org/10.1016/j.ajhg.2023.10.011
+  - type: article
+    title: "Summix: A method for detecting and adjusting for population structure in genetic summary data"
+    authors:
+      - family-names: Arriaga-MacKenzie
+        given-names: I. S.
+      - family-names: Matesi
+        given-names: G.
+      - family-names: Chen
+        given-names: S.
+      - family-names: Hendricks
+        given-names: A. E.
+    journal: The American Journal of Human Genetics
+    year: 2021
+    doi: 10.1016/j.ajhg.2021.05.016
+    url: https://doi.org/10.1016/j.ajhg.2021.05.016
   - type: article
     title: "WhatsHap: Weighted Haplotype Assembly for Future-Generation Sequencing Reads"
     authors:

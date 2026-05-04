@@ -1,4 +1,4 @@
-# phase_mnv_rs
+# phase_tools-rs
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, comment = "", collapse = TRUE)
@@ -28,6 +28,7 @@ unphase_vcf <- file.path("target", "release", "unphase_vcf")
 fermi_lite_assemble <- file.path("target", "release", "fermi_lite_assemble")
 bam_error_model <- file.path("target", "release", "bam_error_model")
 phase_adjudicate <- file.path("target", "release", "phase_adjudicate")
+bam_contamination <- file.path("target", "release", "bam_contamination")
 fixture_ref <- file.path("tests", "fixtures", "ref.fa")
 
 fence <- function(x) {
@@ -90,9 +91,10 @@ external_example <- function() {
 }
 ```
 
-`phase_mnv_rs` is a phased VCF/BCF haplotype merger. It takes variants carried
-on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
-`TYPE=COMPLEX` records.
+`phase_tools-rs` is a Rust toolkit for phased variant handling, read-backed
+evidence checks, BAM/CRAM error modeling, and contamination probes. Its flagship
+`phase_mnv_rs` binary takes variants carried on the same phased haplotype/phase
+set and emits normalized `TYPE=MNV` or `TYPE=COMPLEX` records.
 
 ## Scope at a glance
 
@@ -128,7 +130,7 @@ make install          # install Rust CLIs to ~/.local/bin
 make static-release   # static Linux Rust binary when supported
 make install-static   # install static Linux binary when supported
 # cargo also builds phase_compare, unphase_vcf, fermi_lite_assemble,
-# bam_error_model, and phase_adjudicate
+# bam_error_model, phase_adjudicate, and bam_contamination
 ```
 
 Override the Rust target when needed:
@@ -166,7 +168,7 @@ and output. Stdout remains plain VCF.
 
 ## Citation
 
-Please cite the upstream methods that match the parts of `phase_mnv_rs` you use.
+Please cite the upstream methods that match the parts of `phase_tools-rs` you use.
 
 For normalized `REF`/`ALT` representation:
 
@@ -234,6 +236,20 @@ fence(run_tool(bam_error_model))
 ```{r phase-adjudicate-help, results='asis'}
 fence(run_tool(phase_adjudicate))
 ```
+
+### Experimental BAM contamination anchor probe (`bam_contamination`)
+
+```{r bam-contamination-help, results='asis'}
+fence(run_tool(bam_contamination))
+```
+
+Anchors may be supplied as a headered TSV (`chrom,pos,ref,alt,gt[,ref_af]`) or as
+VCF/VCF.GZ/VCF.BGZ/BCF with sample `GT`. For VCF/BCF anchors, `INFO/REF_AF` is used as
+reference allele frequency when present; otherwise `INFO/AF` is treated as ALT
+frequency and converted to `ref_af = 1 - AF`. Anchor REF bases are validated
+against the supplied FASTA. Output `ref_fraction` and `alt_fraction` use
+`ref_count + alt_count` as denominator, while `other_fraction` uses
+`ref_count + alt_count + other_count`.
 
 ## Examples
 
@@ -427,6 +443,7 @@ Detailed semantics and validation notes are in:
 
 - [`docs/semantics.md`](docs/semantics.md)
 - [`docs/validation.md`](docs/validation.md)
+- [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md)
 
 ### Experimental fermi-lite local assembly binding
 
@@ -471,6 +488,14 @@ indexed BAM/CRAM reads spanning both sites, applies no MAPQ/baseQ filter by
 default, and emits a TSV winner/support/ambiguity summary. It is not yet a final
 assembly-aware adjudication workflow and does not consume `bam_error_model` or
 fermi-lite outputs directly.
+
+`bam_contamination` is an experimental anchor-site probe for BAM/CRAM data. It
+counts REF/ALT/other bases at caller-supplied anchors and reports raw reference
+infiltration at homozygous-alt anchors, plus a simple CHARR-like component when
+a reference allele frequency is supplied. This is useful for targeted panels only
+when the panel includes appropriate independent contamination anchors; HLA-only
+signals should be interpreted cautiously because HLA polymorphism and paralogy
+can mimic contamination.
 
 If you use fermi-lite-backed local assembly results, cite the FermiKit paper
 recommended by fermi-lite (Li 2015, Bioinformatics; doi:10.1093/bioinformatics/btv440).

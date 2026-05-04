@@ -1,9 +1,13 @@
 [package]
-name = "phase_mnv_rs"
+name = "phase_tools-rs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Rust phased VCF/BCF haplotype MNV/complex builder with vt-style normalization"
+description = "Rust toolkit for phased variant handling, read evidence, BAM error modeling, and contamination probes"
+repository = "https://github.com/sounkou-bioinfo/phase_tools-rs"
+homepage = "https://github.com/sounkou-bioinfo/phase_tools-rs"
+documentation = "https://github.com/sounkou-bioinfo/phase_tools-rs#readme"
+readme = "README.md"
 
 [[bin]]
 name = "phase_mnv_rs"

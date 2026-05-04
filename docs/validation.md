@@ -1,7 +1,7 @@
 # Validation notes
 
-This Rust-only repository validates `phase_mnv_rs` with explicit tracked
-fixtures. No private/local paths are embedded in tests or documentation.
+This Rust-only repository validates `phase_tools-rs` binaries with explicit
+tracked fixtures. No private/local paths are embedded in tests or documentation.
 
 ## Positive behavior fixtures
 
@@ -45,6 +45,10 @@ Behavior fixtures cover:
 - experimental `phase_adjudicate` pair-level read-evidence coverage on tracked
   VCF/BAM fixtures, including same-phase rows, switched truth/query parity, and
   explicit baseQ filtering
+- experimental `bam_contamination` anchor-site contamination probe coverage on
+  tracked BAM fixtures, including homozygous-alt reference infiltration,
+  optional CHARR-like allele-frequency adjustment, explicit baseQ filtering, and
+  unsupported genotype rejection
 
 ## Negative/failure-mode fixtures
 

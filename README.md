@@ -1,8 +1,9 @@
-# phase_mnv_rs
+# phase_tools-rs
 
-`phase_mnv_rs` is a phased VCF/BCF haplotype merger. It takes variants carried
-on the same phased haplotype/phase set and emits normalized `TYPE=MNV` or
-`TYPE=COMPLEX` records.
+`phase_tools-rs` is a Rust toolkit for phased variant handling, read-backed
+evidence checks, BAM/CRAM error modeling, and contamination probes. Its flagship
+`phase_mnv_rs` binary takes variants carried on the same phased haplotype/phase
+set and emits normalized `TYPE=MNV` or `TYPE=COMPLEX` records.
 
 ## Scope at a glance
 
@@ -38,7 +39,7 @@ make install          # install Rust CLIs to ~/.local/bin
 make static-release   # static Linux Rust binary when supported
 make install-static   # install static Linux binary when supported
 # cargo also builds phase_compare, unphase_vcf, fermi_lite_assemble,
-# bam_error_model, and phase_adjudicate
+# bam_error_model, phase_adjudicate, and bam_contamination
 ```
 
 Override the Rust target when needed:
@@ -76,7 +77,7 @@ and output. Stdout remains plain VCF.
 
 ## Citation
 
-Please cite the upstream methods that match the parts of `phase_mnv_rs` you use.
+Please cite the upstream methods that match the parts of `phase_tools-rs` you use.
 
 For normalized `REF`/`ALT` representation:
 
@@ -313,6 +314,47 @@ options:
 -h, --help                 Show this help
 ```
 
+### Experimental BAM contamination anchor probe (`bam_contamination`)
+
+```text
+usage: bam_contamination --reference ref.fa --bam reads.bam --anchors anchors.tsv|vcf|vcf.gz|vcf.bgz|bcf [options]
+
+Experimental anchor-site contamination probe for BAM/CRAM data. It counts read
+bases at caller-supplied anchor sites and reports raw reference infiltration at
+homozygous-alternate anchors, with an optional CHARR-like adjustment when a
+reference allele frequency is supplied. It applies no MAPQ/baseQ filter by
+default; optional thresholds are explicit.
+
+Anchor TSV requires a header with columns: chrom, pos, ref, alt, gt, optional
+ref_af. Positions are 1-based. Anchor VCF/VCF.GZ/VCF.BGZ/BCF input is also supported; GT is
+read from the selected sample, INFO/REF_AF is used when present, and INFO/AF is
+interpreted as ALT frequency when REF_AF is absent. GT currently supports
+biallelic 0/0, 0/1, 1/0, and 1/1 forms with / or |. REF alleles are validated
+against the supplied FASTA.
+
+options:
+-r, --reference FILE       Required FASTA reference (REF validation; CRAM decoding)
+--bam FILE             Indexed BAM/CRAM read evidence
+--anchors FILE         Anchor TSV or VCF/VCF.GZ/VCF.BGZ/BCF SNV anchors
+--sample NAME          Sample name for VCF/BCF anchors (default: first sample)
+-o, --output FILE          Output TSV (default: stdout)
+-@, --threads N            htslib reader threads (default: 1)
+--min-mapq N           Optional MAPQ cutoff (default: 0; no cutoff)
+--min-baseq N          Optional baseQ cutoff (default: 0; no cutoff)
+--include-duplicates   Include duplicate reads
+--include-secondary    Include secondary alignments
+--include-supplementary Include supplementary alignments
+-h, --help                 Show this help
+```
+
+Anchors may be supplied as a headered TSV (`chrom,pos,ref,alt,gt[,ref_af]`) or as
+VCF/VCF.GZ/VCF.BGZ/BCF with sample `GT`. For VCF/BCF anchors, `INFO/REF_AF` is used as
+reference allele frequency when present; otherwise `INFO/AF` is treated as ALT
+frequency and converted to `ref_af = 1 - AF`. Anchor REF bases are validated
+against the supplied FASTA. Output `ref_fraction` and `alt_fraction` use
+`ref_count + alt_count` as denominator, while `other_fraction` uses
+`ref_count + alt_count + other_count`.
+
 ## Examples
 
 These examples are executed when `README.md` is rendered from `README.Rmd`, so
@@ -504,6 +546,7 @@ Detailed semantics and validation notes are in:
 
 - [`docs/semantics.md`](docs/semantics.md)
 - [`docs/validation.md`](docs/validation.md)
+- [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md)
 
 ### Experimental fermi-lite local assembly binding
 
@@ -548,6 +591,14 @@ indexed BAM/CRAM reads spanning both sites, applies no MAPQ/baseQ filter by
 default, and emits a TSV winner/support/ambiguity summary. It is not yet a final
 assembly-aware adjudication workflow and does not consume `bam_error_model` or
 fermi-lite outputs directly.
+
+`bam_contamination` is an experimental anchor-site probe for BAM/CRAM data. It
+counts REF/ALT/other bases at caller-supplied anchors and reports raw reference
+infiltration at homozygous-alt anchors, plus a simple CHARR-like component when
+a reference allele frequency is supplied. This is useful for targeted panels only
+when the panel includes appropriate independent contamination anchors; HLA-only
+signals should be interpreted cautiously because HLA polymorphism and paralogy
+can mimic contamination.
 
 If you use fermi-lite-backed local assembly results, cite the FermiKit paper
 recommended by fermi-lite (Li 2015, Bioinformatics; doi:10.1093/bioinformatics/btv440).

@@ -60,6 +60,7 @@ jobs:
             fermi_lite="target/${host}/release/fermi_lite_assemble"
             bam_error_model="target/${host}/release/bam_error_model"
             phase_adjudicate="target/${host}/release/phase_adjudicate"
+            bam_contamination="target/${host}/release/bam_contamination"
           else
             bin="target/release/phase_mnv_rs"
             phase_compare="target/release/phase_compare"
@@ -67,6 +68,7 @@ jobs:
             fermi_lite="target/release/fermi_lite_assemble"
             bam_error_model="target/release/bam_error_model"
             phase_adjudicate="target/release/phase_adjudicate"
+            bam_contamination="target/release/bam_contamination"
           fi
           test -x "$bin"
           test -x "$phase_compare"
@@ -74,13 +76,15 @@ jobs:
           test -x "$fermi_lite"
           test -x "$bam_error_model"
           test -x "$phase_adjudicate"
+          test -x "$bam_contamination"
           echo "path=$bin" >> "$GITHUB_OUTPUT"
           echo "phase_compare=$phase_compare" >> "$GITHUB_OUTPUT"
           echo "unphase=$unphase" >> "$GITHUB_OUTPUT"
           echo "fermi_lite=$fermi_lite" >> "$GITHUB_OUTPUT"
           echo "bam_error_model=$bam_error_model" >> "$GITHUB_OUTPUT"
           echo "phase_adjudicate=$phase_adjudicate" >> "$GITHUB_OUTPUT"
-          file "$bin" "$phase_compare" "$unphase" "$fermi_lite" "$bam_error_model" "$phase_adjudicate"
+          echo "bam_contamination=$bam_contamination" >> "$GITHUB_OUTPUT"
+          file "$bin" "$phase_compare" "$unphase" "$fermi_lite" "$bam_error_model" "$phase_adjudicate" "$bam_contamination"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             ldd "$bin" || true
             ldd "$phase_compare" || true
@@ -88,6 +92,7 @@ jobs:
             ldd "$fermi_lite" || true
             ldd "$bam_error_model" || true
             ldd "$phase_adjudicate" || true
+            ldd "$bam_contamination" || true
           else
             otool -L "$bin"
             otool -L "$phase_compare"
@@ -95,6 +100,7 @@ jobs:
             otool -L "$fermi_lite"
             otool -L "$bam_error_model"
             otool -L "$phase_adjudicate"
+            otool -L "$bam_contamination"
           fi
 
       - name: Test Rust binary
@@ -110,6 +116,7 @@ jobs:
           ./tests/test_fermi_lite.sh "${{ steps.rust-bin.outputs.fermi_lite }}"
           ./tests/test_bam_error_model.sh "${{ steps.rust-bin.outputs.bam_error_model }}"
           ./tests/test_phase_adjudicate.sh "${{ steps.rust-bin.outputs.phase_adjudicate }}"
+          ./tests/test_bam_contamination.sh "${{ steps.rust-bin.outputs.bam_contamination }}"
           ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
 
       - name: Check generated README is up to date
@@ -145,6 +152,7 @@ jobs:
           cp "${{ steps.rust-bin.outputs.fermi_lite }}" "dist-ci/fermi_lite_assemble-${suffix}"
           cp "${{ steps.rust-bin.outputs.bam_error_model }}" "dist-ci/bam_error_model-${suffix}"
           cp "${{ steps.rust-bin.outputs.phase_adjudicate }}" "dist-ci/phase_adjudicate-${suffix}"
+          cp "${{ steps.rust-bin.outputs.bam_contamination }}" "dist-ci/bam_contamination-${suffix}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
           else
@@ -155,5 +163,5 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: phase_mnv-${{ runner.os }}-${{ runner.arch }}
+          name: phase_tools-${{ runner.os }}-${{ runner.arch }}
           path: dist-ci/*
