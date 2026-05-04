@@ -1,0 +1,84 @@
+# phase_tools-rs CLI help
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment = "", collapse = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("..", mustWork = TRUE))
+
+run_cmd <- function(cmd, args = character()) {
+  if (!file.exists(cmd) && !nzchar(Sys.which(cmd))) {
+    return(sprintf(
+      "%s not found. Run `make release` before rendering docs/cli.md.",
+      cmd
+    ))
+  }
+  out <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  if (!is.null(status) && status != 0) {
+    out <- c(out, sprintf("[exit status %s]", status))
+  }
+  paste(out, collapse = "\n")
+}
+
+run_tool <- function(cmd, args = "--help") {
+  run_cmd(cmd, args)
+}
+
+phase_mnv_rs <- file.path("target", "release", "phase_mnv_rs")
+phase_compare <- file.path("target", "release", "phase_compare")
+unphase_vcf <- file.path("target", "release", "unphase_vcf")
+fermi_lite_assemble <- file.path("target", "release", "fermi_lite_assemble")
+bam_error_model <- file.path("target", "release", "bam_error_model")
+phase_adjudicate <- file.path("target", "release", "phase_adjudicate")
+bam_contamination <- file.path("target", "release", "bam_contamination")
+
+fence <- function(x) {
+  cat("```text\n")
+  cat(x)
+  cat("\n```\n")
+}
+```
+
+This file is generated from `docs/cli.Rmd` by `make readme`. It mirrors the
+`--help` text from the current release binaries.
+
+## `phase_mnv_rs`
+
+```{r rust-help, results='asis'}
+fence(run_tool(phase_mnv_rs))
+```
+
+## `phase_compare`
+
+```{r phase-compare-help, results='asis'}
+fence(run_tool(phase_compare))
+```
+
+## `unphase_vcf`
+
+```{r unphase-help, results='asis'}
+fence(run_tool(unphase_vcf))
+```
+
+## `fermi_lite_assemble`
+
+```{r fermi-lite-help, results='asis'}
+fence(run_tool(fermi_lite_assemble))
+```
+
+## `bam_error_model`
+
+```{r bam-error-model-help, results='asis'}
+fence(run_tool(bam_error_model))
+```
+
+## `phase_adjudicate`
+
+```{r phase-adjudicate-help, results='asis'}
+fence(run_tool(phase_adjudicate))
+```
+
+## `bam_contamination`
+
+```{r bam-contamination-help, results='asis'}
+fence(run_tool(bam_contamination))
+```

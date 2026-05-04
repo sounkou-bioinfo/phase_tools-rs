@@ -72,11 +72,13 @@ compare-whatshap-phase: release
 
 readme: release
 	Rscript -e 'invisible(suppressWarnings(knitr::knit("README.Rmd", "README.md", quiet = TRUE)))'
+	Rscript -e 'invisible(suppressWarnings(knitr::knit("docs/cli.Rmd", "docs/cli.md", quiet = TRUE)))'
 	perl -0pi -e 's/\A(# phase_tools-rs)\n{3,}/$$1\n\n/' README.md
+	perl -0pi -e 's/\A(# phase_tools-rs CLI help)\n{3,}/$$1\n\n/' docs/cli.md
 
 readme-external-example:
 	PHASE_MNV_RUN_EXTERNAL=1 $(MAKE) readme
 
 check-readme:
 	env -u PHASE_MNV_RUN_EXTERNAL -u PHASE_MNV_EXAMPLE_VCF -u PHASE_MNV_EXAMPLE_REF -u PHASE_MNV_EXAMPLE_SAMPLE $(MAKE) readme
-	git diff --exit-code README.md
+	git diff --exit-code README.md docs/cli.md
