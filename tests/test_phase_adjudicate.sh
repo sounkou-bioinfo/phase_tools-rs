@@ -27,6 +27,9 @@ grep -qx $'chr1\t4\t5\t0\t0\t4\t4\t4\t4\t4\t0\t40.000\t60.000\t0\t4\t0\tboth\tfa
 
 case "$(uname -m)" in
   x86_64|amd64)
+    if ! command -v samtools >/dev/null 2>&1; then
+      echo "samtools not found; skipping phase_adjudicate assembly sidecar test"
+    else
     python3 - <<'PY' > "$tmp/asm_ref.fa"
 ref = "ACGTGCTAGCTAGGATCCGATCGATGCTAGCTAGCATCGATCGTTAGCTAGGCTAACCGGTTAACCGGTTAGCATCGATCG"
 print(">chrA")
@@ -84,6 +87,7 @@ EOF
       --assembly-context 25 \
       --assembly-min-asm-ovlp 12 > "$tmp/out.assembly_decision.tsv"
     grep -qx $'chrA\t10\t25\t0\t1\t4\t0\t0\t0\t0\t0\tNA\tNA\t0\t0\t0\ttruth\tfalse\tassembly_evidence' "$tmp/out.assembly_decision.tsv"
+    fi
     ;;
   *) echo "phase_adjudicate assembly sidecar test skipped on non-x86_64 host" ;;
 esac

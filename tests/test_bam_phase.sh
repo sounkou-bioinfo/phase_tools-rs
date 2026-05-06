@@ -30,6 +30,8 @@ diff -u "$fixtures/read_phase.expected.body.vcf" "$tmp/out.vcf"
   "$fixtures/read_phase.vcf" > "$tmp/out.greedy.vcf"
 diff -u "$fixtures/read_phase.expected.body.vcf" "$tmp/out.greedy.vcf"
 
+if command -v samtools >/dev/null 2>&1; then
+
 cat > "$tmp/blank_bridge.vcf" <<'VCF'
 ##fileformat=VCFv4.3
 ##contig=<ID=chr1>
@@ -124,6 +126,10 @@ chrR	2	.	A	C	.	PASS	.	GT:PS	0|1:2
 chrR	20	.	A	AA	.	PASS	.	GT:PS	0|1:2
 VCF
 diff -u "$tmp/leftshifted_insertion.expected.vcf" "$tmp/leftshifted_insertion.body.vcf"
+
+else
+  echo "samtools not found; skipping generated BAM phasing regression tests"
+fi
 
 "$bin" \
   -r "$ref" \

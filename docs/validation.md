@@ -24,7 +24,8 @@ Behavior fixtures cover:
   and BGZF VCF output paths
 - experimental Rust `--phase-from-bam` read-backed phasing on a tiny tracked
   BAM/BAI fixture before MNV construction, using the default exact
-  single-sample MEC dynamic-programming algorithm
+  single-sample MEC dynamic-programming algorithm; additional generated-BAM
+  phasing regressions run when `samtools` is available
 - Rust output format inference for plain VCF, BGZF-compressed VCF, and BCF,
   including `--threads` plumbing for compressed input/output checks when
   `bcftools` is available
@@ -43,9 +44,10 @@ Behavior fixtures cover:
   mapchk-like high-nonref site guard, and per-read-position TSV coverage through
   `bam_error_model` on tracked BAM/SAM fixtures, with no MAPQ filter by default
 - experimental `phase_adjudicate` pair-level read-evidence coverage on tracked
-  VCF/BAM fixtures, including same-phase rows, switched truth/query parity,
-  explicit baseQ filtering, fermi-lite assembly FASTA/TSV sidecars, and guarded
-  `--use-assembly-decision` fallback behavior
+  VCF/BAM fixtures, including same-phase rows, switched truth/query parity, and
+  explicit baseQ filtering; generated-BAM fermi-lite assembly FASTA/TSV sidecar
+  and guarded `--use-assembly-decision` fallback checks run when `samtools` is
+  available
 - experimental `bam_contamination` anchor-site contamination probe coverage on
   tracked BAM fixtures, including homozygous-alt reference infiltration,
   optional CHARR-like allele-frequency adjustment, explicit baseQ filtering, and
