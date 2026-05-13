@@ -21,8 +21,10 @@ options:
   -@, --threads N        Extra htslib/BGZF threads for decompression and
                         compressed output (default: 1)
       --write-index[=FMT]
-                        Build an index after writing -o output. FMT is csi
-                        (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf
+                        Build an index after writing -o output. Indexable
+                        -o outputs self-index by default with CSI; FMT can
+                        be csi or tbi (BGZF VCF only)
+      --no-write-index  Do not build an index for indexable -o output
       --emit MODE        Output mode: mnv (default), combined, or all-sites.
                         combined emits merged MNV/COMPLEX records plus
                         selected-sample input variants not represented by a
@@ -109,8 +111,9 @@ Notes:
     after subsetting. --phase-from-bam is not supported in combined mode.
   * --emit all-sites keeps the original VCF/BCF header via htslib and
     appends phase_mnv metadata instead of replacing it.
-  * --write-index builds a CSI sidecar by default after the output file is
-    closed. Use --write-index=tbi for a tabix/TBI index on BGZF VCF.
+  * Indexable -o outputs (.vcf.gz, .vcf.bgz, .bcf) build a CSI sidecar
+    by default after the output file is closed. Use --write-index=tbi for
+    a tabix/TBI index on BGZF VCF, or --no-write-index to disable.
     Indexing requires coordinate-sorted .vcf.gz/.vcf.bgz/.bcf output.
   * Unless --quiet is set, summary stats go to stderr and include
     input/reference/output (output=stdout for VCF stdout), settings,

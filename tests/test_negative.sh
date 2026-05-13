@@ -76,6 +76,10 @@ expect_fail "negative max gap" \
   "max-gap must be >= 0" \
   "$bin" -r "$ref" --max-gap -1 -s S1 "$valid_vcf"
 
+expect_fail "write-index stdout" \
+  "write-index requires -o/--output" \
+  "$bin" -r "$ref" -s S1 --write-index "$valid_vcf"
+
 expect_fail "write-index plain VCF" \
   "write-index cannot index plain VCF" \
   "$bin" -r "$ref" -s S1 --write-index -o "$tmp/out.vcf" "$valid_vcf"

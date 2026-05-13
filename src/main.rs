@@ -45,6 +45,13 @@ enum OutputIndexKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputIndexPolicy {
+    Auto,
+    Off,
+    On(OutputIndexKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmitMode {
     Mnv,
     Combined,
@@ -152,7 +159,7 @@ struct Config {
     phase_read_list_path: Option<String>,
     threads: usize,
     emit_mode: EmitMode,
-    output_index: Option<OutputIndexKind>,
+    output_index_policy: OutputIndexPolicy,
     mnv_algorithm: MnvAlgorithm,
     codon_map_path: Option<String>,
     max_gap: i64,
@@ -441,8 +448,10 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "  -@, --threads N        Extra htslib/BGZF threads for decompression and\n",
             "                        compressed output (default: 1)\n",
             "      --write-index[=FMT]\n",
-            "                        Build an index after writing -o output. FMT is csi\n",
-            "                        (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf\n",
+            "                        Build an index after writing -o output. Indexable\n",
+            "                        -o outputs self-index by default with CSI; FMT can\n",
+            "                        be csi or tbi (BGZF VCF only)\n",
+            "      --no-write-index  Do not build an index for indexable -o output\n",
             "      --emit MODE        Output mode: mnv (default), combined, or all-sites.\n",
             "                        combined emits merged MNV/COMPLEX records plus\n",
             "                        selected-sample input variants not represented by a\n",
@@ -529,8 +538,9 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "    after subsetting. --phase-from-bam is not supported in combined mode.\n",
             "  * --emit all-sites keeps the original VCF/BCF header via htslib and\n",
             "    appends phase_mnv metadata instead of replacing it.\n",
-            "  * --write-index builds a CSI sidecar by default after the output file is\n",
-            "    closed. Use --write-index=tbi for a tabix/TBI index on BGZF VCF.\n",
+            "  * Indexable -o outputs (.vcf.gz, .vcf.bgz, .bcf) build a CSI sidecar\n",
+            "    by default after the output file is closed. Use --write-index=tbi for\n",
+            "    a tabix/TBI index on BGZF VCF, or --no-write-index to disable.\n",
             "    Indexing requires coordinate-sorted .vcf.gz/.vcf.bgz/.bcf output.\n",
             "  * Unless --quiet is set, summary stats go to stderr and include\n",
             "    input/reference/output (output=stdout for VCF stdout), settings,\n",
@@ -620,7 +630,7 @@ fn parse_args() -> Config {
     let mut phase_read_list_path: Option<String> = None;
     let mut threads = 1usize;
     let mut emit_mode = EmitMode::Mnv;
-    let mut output_index: Option<OutputIndexKind> = None;
+    let mut output_index_policy = OutputIndexPolicy::Auto;
     let mut mnv_algorithm = MnvAlgorithm::Proximity;
     let mut codon_map_path: Option<String> = None;
     let mut max_gap = 0i64;
@@ -687,15 +697,18 @@ fn parse_args() -> Config {
                 emit_mode = parse_emit_mode(&args[i]);
             }
             "--write-index" | "--index" => {
-                output_index = Some(OutputIndexKind::Csi);
+                output_index_policy = OutputIndexPolicy::On(OutputIndexKind::Csi);
+            }
+            "--no-write-index" | "--no-index" => {
+                output_index_policy = OutputIndexPolicy::Off;
             }
             _ if arg.starts_with("--write-index=") => {
                 let value = arg.trim_start_matches("--write-index=");
-                output_index = Some(parse_output_index_kind(value));
+                output_index_policy = OutputIndexPolicy::On(parse_output_index_kind(value));
             }
             _ if arg.starts_with("--index=") => {
                 let value = arg.trim_start_matches("--index=");
-                output_index = Some(parse_output_index_kind(value));
+                output_index_policy = OutputIndexPolicy::On(parse_output_index_kind(value));
             }
             "--mnv-algorithm" => {
                 i += 1;
@@ -893,7 +906,7 @@ fn parse_args() -> Config {
         phase_read_list_path,
         threads,
         emit_mode,
-        output_index,
+        output_index_policy,
         mnv_algorithm,
         codon_map_path,
         max_gap,
@@ -977,8 +990,21 @@ fn index_error_message(code: i32) -> &'static str {
     }
 }
 
+fn resolved_output_index(cfg: &Config) -> Option<OutputIndexKind> {
+    match cfg.output_index_policy {
+        OutputIndexPolicy::Off => None,
+        OutputIndexPolicy::On(kind) => Some(kind),
+        OutputIndexPolicy::Auto => match (cfg.output_path.as_deref(), infer_output_kind(cfg)) {
+            (Some(path), OutputKind::BgzfVcf | OutputKind::Bcf) if path != "-" => {
+                Some(OutputIndexKind::Csi)
+            }
+            _ => None,
+        },
+    }
+}
+
 fn validate_index_request(cfg: &Config) -> Result<(), String> {
-    let Some(index_kind) = cfg.output_index else {
+    let OutputIndexPolicy::On(index_kind) = cfg.output_index_policy else {
         return Ok(());
     };
     let Some(path) = cfg.output_path.as_deref().filter(|p| *p != "-") else {
@@ -999,7 +1025,7 @@ fn validate_index_request(cfg: &Config) -> Result<(), String> {
 }
 
 fn index_output_if_requested(cfg: &Config) -> Result<(), String> {
-    let Some(index_kind) = cfg.output_index else {
+    let Some(index_kind) = resolved_output_index(cfg) else {
         return Ok(());
     };
     let path = cfg
@@ -4236,7 +4262,7 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         cfg.threads,
         cfg.emit_mode.as_str(),
         cfg.mnv_algorithm.as_str(),
-        cfg.output_index
+        resolved_output_index(cfg)
             .map(OutputIndexKind::as_str)
             .unwrap_or("none")
     );

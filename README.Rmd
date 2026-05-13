@@ -82,9 +82,10 @@ Output format is inferred from `-o/--output`: `.vcf`, `.vcf.gz`, `.vcf.bgz`, or
 `.bcf`; stdout is plain VCF. Use `.vcf.gz`, `.vcf.bgz`, or `.bcf` when you need
 indexed output. Plain `.vcf` output and stdout redirection are not indexable; do
 not write `phase_mnv_rs ... > out.vcf.gz` and expect a BGZF-indexable file. Use
-`-o out.vcf.gz` instead. Add `--write-index` to build a CSI sidecar after the
-output file is closed, or `--write-index=tbi` for a tabix/TBI sidecar on BGZF
-VCF. Use `--threads N` / `-@ N` for htslib/BGZF worker threads.
+`-o out.vcf.gz` instead. Indexable `-o` outputs self-index by default with CSI
+after the output file is closed. Use `--write-index=tbi` for a tabix/TBI sidecar
+on BGZF VCF, or `--no-write-index` to disable self-indexing. Use `--threads N` /
+`-@ N` for htslib/BGZF worker threads.
 
 The default `--emit mnv` output contains only constructed MNV/COMPLEX records.
 Use `--emit combined` when you want constructed records plus selected-sample

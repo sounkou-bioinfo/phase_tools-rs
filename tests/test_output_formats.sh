@@ -16,9 +16,16 @@ cp "$fixtures/ref.fa" "$tmp/ref.fa"
 ref="$tmp/ref.fa"
 
 "$bin" -q -r "$ref" -s S1 --threads 2 -o "$tmp/out.vcf.gz" "$fixtures/phased_mnv.vcf"
-bcftools index -f "$tmp/out.vcf.gz"
+test -s "$tmp/out.vcf.gz.csi"
+bcftools index --stats "$tmp/out.vcf.gz" > "$tmp/out.vcf.gz.stats"
+grep -q $'^chr1\t\.\t3$' "$tmp/out.vcf.gz.stats"
 bcftools view -H "$tmp/out.vcf.gz" > "$tmp/out.vcf.gz.body"
 diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/out.vcf.gz.body"
+
+"$bin" -q -r "$ref" -s S1 --threads 2 --no-write-index -o "$tmp/no_index.vcf.gz" "$fixtures/phased_mnv.vcf"
+test ! -e "$tmp/no_index.vcf.gz.csi"
+test ! -e "$tmp/no_index.vcf.gz.tbi"
+bcftools index -f "$tmp/no_index.vcf.gz"
 
 "$bin" -q -r "$ref" -s S1 --threads 2 --write-index -o "$tmp/self_index.vcf.gz" "$fixtures/phased_mnv.vcf"
 test -s "$tmp/self_index.vcf.gz.csi"
@@ -31,7 +38,7 @@ bcftools index --stats "$tmp/self_index_tbi.vcf.gz" > "$tmp/self_index_tbi.stats
 grep -q $'^chr1\t\.\t3$' "$tmp/self_index_tbi.stats"
 
 "$bin" -q -r "$ref" -s S1 --threads 2 -o "$tmp/out.vcf.bgz" "$fixtures/phased_mnv.vcf"
-bcftools index -f "$tmp/out.vcf.bgz"
+test -s "$tmp/out.vcf.bgz.csi"
 bcftools view -H "$tmp/out.vcf.bgz" > "$tmp/out.vcf.bgz.body"
 diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/out.vcf.bgz.body"
 
@@ -44,13 +51,13 @@ diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/out.vcf.bgz.body"
   --phase-from-bam "$fixtures/read_phase.bam" \
   -o "$tmp/all_sites.vcf.gz" \
   "$fixtures/read_phase.vcf"
-bcftools index -f "$tmp/all_sites.vcf.gz"
+test -s "$tmp/all_sites.vcf.gz.csi"
 bcftools view -H "$tmp/all_sites.vcf.gz" > "$tmp/all_sites.body"
 grep -qx $'chr1\t1\t.\tA\tG\t.\tPASS\t.\tGT:PS\t0|1:1' "$tmp/all_sites.body"
 grep -qx $'chr1\t5\t.\tA\tG\t.\tPASS\t.\tGT:PS\t1|0:1' "$tmp/all_sites.body"
 
 "$bin" -q -r "$ref" -s S1 --threads 2 -o "$tmp/out.bcf" "$fixtures/phased_mnv.vcf"
-bcftools index -f "$tmp/out.bcf"
+test -s "$tmp/out.bcf.csi"
 bcftools view -H "$tmp/out.bcf" > "$tmp/out.bcf.body"
 diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/out.bcf.body"
 
@@ -59,7 +66,7 @@ test -s "$tmp/self_index.bcf.csi"
 bcftools index --stats "$tmp/self_index.bcf" > "$tmp/self_index_bcf.stats"
 grep -q $'^chr1\t\.\t3$' "$tmp/self_index_bcf.stats"
 
-"$bin" -q -r "$ref" -s S1 --threads 2 --emit combined --write-index -o "$tmp/combined.vcf.gz" "$fixtures/phased_mnv.vcf"
+"$bin" -q -r "$ref" -s S1 --threads 2 --emit combined -o "$tmp/combined.vcf.gz" "$fixtures/phased_mnv.vcf"
 test -s "$tmp/combined.vcf.gz.csi"
 bcftools view -H "$tmp/combined.vcf.gz" > "$tmp/combined.body"
 diff -u "$fixtures/combined.expected.body.vcf" "$tmp/combined.body"
@@ -68,5 +75,6 @@ diff -u "$fixtures/combined.expected.body.vcf" "$tmp/combined.body"
   > "$tmp/summary.stdout" 2> "$tmp/summary.stderr"
 test ! -s "$tmp/summary.stdout"
 grep -q 'output_format=vcf.gz threads=2' "$tmp/summary.stderr"
+grep -q 'write_index=csi' "$tmp/summary.stderr"
 
 echo "phase_mnv output format tests passed"

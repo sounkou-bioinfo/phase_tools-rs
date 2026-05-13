@@ -28,15 +28,15 @@ bcftools. In particular, shell redirection such as
 `phase_mnv_rs ... > out.vcf.gz` creates a plain VCF byte stream with a misleading
 file name; use `-o out.vcf.gz` to request BGZF-compressed VCF.
 
-`--write-index` builds an index after the output writer is closed. The default is
-CSI (`out.vcf.gz.csi`, `out.vcf.bgz.csi`, or `out.bcf.csi`); use
-`--write-index=tbi` when a tabix/TBI sidecar is specifically wanted for BGZF VCF.
-BCF output requires CSI. As with `bcftools index`, the output must be coordinate
-sorted.
+Indexable `-o` outputs self-index after the output writer is closed. The default
+sidecar is CSI (`out.vcf.gz.csi`, `out.vcf.bgz.csi`, or `out.bcf.csi`). Use
+`--write-index=tbi` when a tabix/TBI sidecar is specifically wanted for BGZF VCF,
+or `--no-write-index` to disable automatic indexing. BCF output requires CSI. As
+with `bcftools index`, the output must be coordinate sorted.
 
-Tracked output-format tests require constructed MNV VCF.GZ, VCF.BGZ, BCF,
-self-indexed VCF.GZ/BCF, combined VCF.GZ, and BAM-phased all-sites VCF.GZ outputs
-to be readable and indexable by bcftools when bcftools is available.
+Tracked output-format tests require default self-indexed constructed MNV VCF.GZ,
+VCF.BGZ, BCF, combined VCF.GZ, and BAM-phased all-sites VCF.GZ outputs to be
+readable and indexable by bcftools when bcftools is available.
 
 ## BAM-backed phasing
 
