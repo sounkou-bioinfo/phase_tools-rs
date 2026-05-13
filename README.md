@@ -24,9 +24,14 @@ helpers are experimental unless a document explicitly says otherwise.
 | `bam_contamination` | Experimental anchor-site contamination probe from BAM/CRAM plus TSV/VCF/BCF anchors. |
 | `bam_ancestry` | Experimental Summix-style ancestry mixture probe from BAM/CRAM plus population-AF anchors. |
 | `fermi_lite_assemble` | fermi-lite FFI local assembly utility for assembly-backed adjudication workflows. |
-| `multi_region_joint_detect` | Initial multi-region SNV candidate evidence scanner for grouped homologous regions. |
+| `multi_region_joint_detect` | Initial multi-region SNV candidate evidence scanner with TSV and diagnostic VCF outputs for grouped homologous regions. |
 
 Full generated CLI help lives in [`docs/cli.md`](docs/cli.md).
+
+`multi_region_joint_detect --vcf` writes a diagnostic plain VCF sidecar with one
+record per alt-positive region observation. `EVENT`/`EVENTTYPE` link homologous
+observations for the same grouped offset; string INFO values are percent-escaped
+for VCF safety.
 
 ## Quick start
 

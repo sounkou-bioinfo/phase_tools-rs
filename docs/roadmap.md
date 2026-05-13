@@ -104,8 +104,11 @@ Initial implemented foundation:
 
 - `phase_tools::mrjd` and `multi_region_joint_detect` provide a manifest-driven
   SNV evidence scanner that groups candidate observations by homologous offset
-  across user-specified region groups and emits audit TSV diagnostics. This is a
-  bootstrap candidate-evidence layer, not a posterior caller.
+  across user-specified region groups and emits audit TSV diagnostics plus an
+  optional diagnostic VCF sidecar with one record per alt-positive region
+  observation and `EVENT`/`EVENTTYPE` tags linking homologous evidence. VCF INFO
+  string values are percent-escaped. This is a bootstrap candidate-evidence
+  layer, not a posterior caller.
 
 Initial non-goals:
 

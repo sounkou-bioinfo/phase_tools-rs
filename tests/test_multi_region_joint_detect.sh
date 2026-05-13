@@ -52,6 +52,7 @@ samtools index "$tmp/reads.bam"
   --min-mapq 20 \
   --min-alt-count 2 \
   --min-alt-fraction 0.25 \
+  --vcf "$tmp/out.vcf" \
   "$tmp/reads.bam" > "$tmp/out.tsv"
 
 cat > "$tmp/expected.tsv" <<'TSV'
@@ -60,14 +61,51 @@ G1	6	C	9	5	2	2	copy1|chr1:15|A|5|3|0.600000;copy2|chr2:35|A|4|2|0.500000
 TSV
 
 diff -u "$tmp/expected.tsv" "$tmp/out.tsv"
+grep -q '##INFO=<ID=EVENT,' "$tmp/out.vcf"
+grep -q '##INFO=<ID=EVENTTYPE,' "$tmp/out.vcf"
+grep -v '^#' "$tmp/out.vcf" > "$tmp/out.vcf.body"
+cat > "$tmp/expected.vcf.body" <<'VCF'
+chr1	15	.	A	C	.	PASS	EVENT=MRJD:G1:6:C;EVENTTYPE=MRJD_SNV;MRJD_GROUP=G1;MRJD_COPY=copy1;MRJD_OFFSET=6;MRJD_REGIONS_WITH_ALT=2;MRJD_REGION_COUNT=2;MRJD_ALT_POSITIVE_DEPTH=9;MRJD_ALT_POSITIVE_ALT_COUNT=5;MRJD_COPY_DEPTH=5;MRJD_COPY_ALT_COUNT=3;MRJD_COPY_ALT_FRACTION=0.600000
+chr2	35	.	A	C	.	PASS	EVENT=MRJD:G1:6:C;EVENTTYPE=MRJD_SNV;MRJD_GROUP=G1;MRJD_COPY=copy2;MRJD_OFFSET=6;MRJD_REGIONS_WITH_ALT=2;MRJD_REGION_COUNT=2;MRJD_ALT_POSITIVE_DEPTH=9;MRJD_ALT_POSITIVE_ALT_COUNT=5;MRJD_COPY_DEPTH=4;MRJD_COPY_ALT_COUNT=2;MRJD_COPY_ALT_FRACTION=0.500000
+VCF
+diff -u "$tmp/expected.vcf.body" "$tmp/out.vcf.body"
 
 "$bin" \
   --reference "$tmp/ref.fa" \
   --regions "$tmp/regions.tsv" \
   --min-mapq 20 \
   --min-alt-count 4 \
+  --vcf "$tmp/empty.vcf" \
   "$tmp/reads.bam" > "$tmp/empty.tsv"
 [[ $(awk 'END {print NR + 0}' "$tmp/empty.tsv") == 1 ]]
+grep -q '^#CHROM' "$tmp/empty.vcf"
+[[ $(grep -vc '^#' "$tmp/empty.vcf") == 0 ]]
+
+if "$bin" \
+  --reference "$tmp/ref.fa" \
+  --regions "$tmp/regions.tsv" \
+  --output "$tmp/same_path.out" \
+  --vcf "$tmp/same_path.out" \
+  "$tmp/reads.bam" > "$tmp/same_path.stdout" 2> "$tmp/same_path.err"; then
+  echo "same --output/--vcf path unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q -- '--output and --vcf must be different paths' "$tmp/same_path.err"
+
+cat > "$tmp/regions.escape.tsv" <<'TSV'
+group	chrom	start	end	copy
+G 1	chr1	10	20	copy;1
+TSV
+"$bin" \
+  --reference "$tmp/ref.fa" \
+  --regions "$tmp/regions.escape.tsv" \
+  --min-mapq 20 \
+  --min-alt-count 2 \
+  --vcf "$tmp/escape.vcf" \
+  "$tmp/reads.bam" > "$tmp/escape.tsv"
+grep -q 'EVENT=MRJD:G%201:6:C' "$tmp/escape.vcf"
+grep -q 'MRJD_GROUP=G%201' "$tmp/escape.vcf"
+grep -q 'MRJD_COPY=copy%3B1' "$tmp/escape.vcf"
 
 "$bin" \
   --reference "$tmp/ref.fa" \

@@ -327,11 +327,12 @@ usage: multi_region_joint_detect --reference ref.fa --regions regions.tsv [optio
 Initial multi-region SNV candidate evidence scanner. Regions sharing a group are
 compared by 1-based offset within each region, so homologous loci can be audited
 together before downstream joint genotyping. This is not a DRAGEN-equivalent
-caller and currently emits a TSV diagnostics table, not VCF. Depth/count totals
-are over alt-positive region observations; ref-only or uncovered copies are
-counted in region_count but omitted from per_region. Duplicate, QC-fail,
-secondary, and supplementary records are excluded. MAPQ 255 is excluded only
-when --min-mapq is greater than 0.
+caller and currently emits a TSV diagnostics table plus optional VCF diagnostics.
+Depth/count totals are over alt-positive region observations; ref-only or
+uncovered copies are counted in region_count but omitted from per_region. The
+VCF sidecar emits one record per alt-positive region observation. String INFO
+values are percent-escaped. Duplicate, QC-fail, secondary, and supplementary
+records are excluded. MAPQ 255 is excluded only when --min-mapq is greater than 0.
 
 regions.tsv columns:
 group<TAB>chrom<TAB>start<TAB>end[<TAB>copy]
@@ -345,5 +346,6 @@ options:
 --min-alt-fraction F   Minimum per-region alt fraction (default: 0.20)
 -@, --threads N            BAM/CRAM reader threads (default: 1)
 -o, --output FILE          Output TSV path (default: stdout)
+--vcf FILE             Write diagnostic VCF sidecar with EVENT/EVENTTYPE
 -h, --help                 Show this help
 ```
