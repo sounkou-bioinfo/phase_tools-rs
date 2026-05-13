@@ -1,12 +1,12 @@
 use libc::c_void;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read as BamRead};
-use rust_htslib::bcf::header::HeaderView;
+use rust_htslib::bcf::header::{HeaderRecord, HeaderView};
 use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::htslib;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -39,8 +39,15 @@ enum OutputKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputIndexKind {
+    Csi,
+    Tbi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmitMode {
     Mnv,
+    Combined,
     AllSites,
 }
 
@@ -93,7 +100,24 @@ impl EmitMode {
     fn as_str(self) -> &'static str {
         match self {
             EmitMode::Mnv => "mnv",
+            EmitMode::Combined => "combined",
             EmitMode::AllSites => "all-sites",
+        }
+    }
+}
+
+impl OutputIndexKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            OutputIndexKind::Csi => "csi",
+            OutputIndexKind::Tbi => "tbi",
+        }
+    }
+
+    fn min_shift(self) -> i32 {
+        match self {
+            OutputIndexKind::Csi => 14,
+            OutputIndexKind::Tbi => 0,
         }
     }
 }
@@ -128,6 +152,7 @@ struct Config {
     phase_read_list_path: Option<String>,
     threads: usize,
     emit_mode: EmitMode,
+    output_index: Option<OutputIndexKind>,
     mnv_algorithm: MnvAlgorithm,
     codon_map_path: Option<String>,
     max_gap: i64,
@@ -402,9 +427,14 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "                        .bcf = BCF; stdout defaults to plain VCF\n",
             "  -@, --threads N        Extra htslib/BGZF threads for decompression and\n",
             "                        compressed output (default: 1)\n",
-            "      --emit MODE        Output mode: mnv (default) or all-sites. all-sites\n",
-            "                        is Rust-only, preserves input records/header, and\n",
-            "                        updates GT/PS when used with --phase-from-bam\n",
+            "      --write-index[=FMT]\n",
+            "                        Build an index after writing -o output. FMT is csi\n",
+            "                        (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf\n",
+            "      --emit MODE        Output mode: mnv (default), combined, or all-sites.\n",
+            "                        combined emits merged MNV/COMPLEX records plus input\n",
+            "                        variants not consumed by a merge; all-sites preserves\n",
+            "                        input records/header and updates GT/PS when used with\n",
+            "                        --phase-from-bam\n",
             "  -g, --max-gap N        Allow up to N unchanged reference bases between\n",
             "                        phased variants when building one merged call (default: 0)\n",
             "      --mnv-algorithm MODE\n",
@@ -478,8 +508,14 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "    recomposes phased SNVs sharing a codon key from --codon-map.\n",
             "  * Output format is inferred from -o/--output. BCF output always includes\n",
             "    a VCF/BCF header even if --no-header is set.\n",
+            "  * --emit combined keeps the original VCF/BCF header for the selected\n",
+            "    sample, appends phase_mnv metadata, and replaces consumed source\n",
+            "    records with constructed MNV/COMPLEX records.\n",
             "  * --emit all-sites keeps the original VCF/BCF header via htslib and\n",
             "    appends phase_mnv metadata instead of replacing it.\n",
+            "  * --write-index builds a CSI sidecar by default after the output file is\n",
+            "    closed. Use --write-index=tbi for a tabix/TBI index on BGZF VCF.\n",
+            "    Indexing requires coordinate-sorted .vcf.gz/.vcf.bgz/.bcf output.\n",
             "  * Unless --quiet is set, summary stats go to stderr and include\n",
             "    input/reference/output (output=stdout for VCF stdout), settings,\n",
             "    skip counts, unsupported categories, and N counts.\n"
@@ -508,8 +544,17 @@ fn parse_unsupported_alleles_policy(s: &str) -> UnsupportedAllelesPolicy {
 fn parse_emit_mode(s: &str) -> EmitMode {
     match s {
         "mnv" => EmitMode::Mnv,
+        "combined" | "mnv-plus-unmerged" | "merged-plus-unmerged" => EmitMode::Combined,
         "all-sites" | "all" | "phased-vcf" => EmitMode::AllSites,
-        _ => die("--emit must be one of: mnv, all-sites"),
+        _ => die("--emit must be one of: mnv, combined, all-sites"),
+    }
+}
+
+fn parse_output_index_kind(s: &str) -> OutputIndexKind {
+    match s {
+        "csi" | "CSI" => OutputIndexKind::Csi,
+        "tbi" | "TBI" | "tabix" => OutputIndexKind::Tbi,
+        _ => die("--write-index must be csi or tbi"),
     }
 }
 
@@ -559,6 +604,7 @@ fn parse_args() -> Config {
     let mut phase_read_list_path: Option<String> = None;
     let mut threads = 1usize;
     let mut emit_mode = EmitMode::Mnv;
+    let mut output_index: Option<OutputIndexKind> = None;
     let mut mnv_algorithm = MnvAlgorithm::Proximity;
     let mut codon_map_path: Option<String> = None;
     let mut max_gap = 0i64;
@@ -623,6 +669,17 @@ fn parse_args() -> Config {
                     die("--emit requires an argument");
                 }
                 emit_mode = parse_emit_mode(&args[i]);
+            }
+            "--write-index" | "--index" => {
+                output_index = Some(OutputIndexKind::Csi);
+            }
+            _ if arg.starts_with("--write-index=") => {
+                let value = arg.trim_start_matches("--write-index=");
+                output_index = Some(parse_output_index_kind(value));
+            }
+            _ if arg.starts_with("--index=") => {
+                let value = arg.trim_start_matches("--index=");
+                output_index = Some(parse_output_index_kind(value));
             }
             "--mnv-algorithm" => {
                 i += 1;
@@ -820,6 +877,7 @@ fn parse_args() -> Config {
         phase_read_list_path,
         threads,
         emit_mode,
+        output_index,
         mnv_algorithm,
         codon_map_path,
         max_gap,
@@ -890,6 +948,70 @@ fn infer_output_kind(cfg: &Config) -> OutputKind {
                 OutputKind::PlainVcf
             }
         }
+    }
+}
+
+fn index_error_message(code: i32) -> &'static str {
+    match code {
+        -1 => "indexing failed",
+        -2 => "opening output failed",
+        -3 => "format not indexable",
+        -4 => "failed to create or save the index",
+        _ => "unknown indexing error",
+    }
+}
+
+fn validate_index_request(cfg: &Config) -> Result<(), String> {
+    let Some(index_kind) = cfg.output_index else {
+        return Ok(());
+    };
+    let Some(path) = cfg.output_path.as_deref().filter(|p| *p != "-") else {
+        return Err(
+            "--write-index requires -o/--output with .vcf.gz, .vcf.bgz, or .bcf output".to_string(),
+        );
+    };
+    match (infer_output_kind(cfg), index_kind) {
+        (OutputKind::PlainVcf, _) => Err(format!(
+            "--write-index cannot index plain VCF output '{path}'; use .vcf.gz, .vcf.bgz, or .bcf"
+        )),
+        (OutputKind::Bcf, OutputIndexKind::Tbi) => {
+            Err("--write-index=tbi is only valid for BGZF VCF; BCF output requires CSI".to_string())
+        }
+        (OutputKind::BgzfVcf | OutputKind::Bcf, OutputIndexKind::Csi)
+        | (OutputKind::BgzfVcf, OutputIndexKind::Tbi) => Ok(()),
+    }
+}
+
+fn index_output_if_requested(cfg: &Config) -> Result<(), String> {
+    let Some(index_kind) = cfg.output_index else {
+        return Ok(());
+    };
+    let path = cfg
+        .output_path
+        .as_deref()
+        .filter(|p| *p != "-")
+        .ok_or_else(|| "--write-index requires file output".to_string())?;
+    let c_path = CString::new(path.as_bytes())
+        .map_err(|_| format!("output path contains NUL byte: {path}"))?;
+    let threads = cfg.threads.min(i32::MAX as usize) as i32;
+    let ret = unsafe {
+        htslib::bcf_index_build3(
+            c_path.as_ptr(),
+            std::ptr::null(),
+            index_kind.min_shift(),
+            threads,
+        )
+    };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to build {} index for '{}': {} (htslib code {})",
+            index_kind.as_str(),
+            path,
+            index_error_message(ret),
+            ret
+        ))
     }
 }
 
@@ -3428,6 +3550,95 @@ fn write_calls_bcf(
     Ok(())
 }
 
+fn consumed_source_positions(calls: &[MnvCall]) -> Result<HashSet<(i32, i64)>, String> {
+    let mut consumed = HashSet::new();
+    for call in calls {
+        for pos in call.positions.split(',') {
+            if pos.is_empty() {
+                continue;
+            }
+            let pos1 = pos.parse::<i64>().map_err(|_| {
+                format!(
+                    "internal error: invalid SOURCE_POS value '{}' for combined output",
+                    pos
+                )
+            })?;
+            consumed.insert((call.rid, pos1));
+        }
+    }
+    Ok(consumed)
+}
+
+fn call_sorts_before_or_at_record(call: &MnvCall, record: &bcf::Record) -> bool {
+    let record_rid = record.rid().map(|rid| rid as i32).unwrap_or(i32::MAX);
+    let record_pos1 = record.pos() + 1;
+    call.rid < record_rid || (call.rid == record_rid && call.start <= record_pos1)
+}
+
+fn write_one_input_record(
+    writer: &mut bcf::Writer,
+    mut record: bcf::Record,
+    st: &mut Stats,
+) -> Result<(), String> {
+    writer.translate(&mut record);
+    writer.subset(&mut record);
+    writer
+        .write(&record)
+        .map_err(|e| format!("failed to write unmerged input record: {e}"))?;
+    st.emitted += 1;
+    Ok(())
+}
+
+fn run_combined(
+    cfg: &Config,
+    header: &HeaderInfo,
+    calls: &[MnvCall],
+    st: &mut Stats,
+) -> Result<(), String> {
+    if cfg.no_header {
+        return Err(
+            "--emit combined preserves the original VCF/BCF header; --no-header is not supported"
+                .to_string(),
+        );
+    }
+    if cfg.phase_bam_path.is_some() {
+        return Err("--emit combined currently requires input-phased VCF/BCF; --phase-from-bam is supported with --emit mnv or --emit all-sites".to_string());
+    }
+
+    let consumed = consumed_source_positions(calls)?;
+    let mut reader = bcf::Reader::from_path(&cfg.input_path)
+        .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
+    if cfg.threads > 1 {
+        reader
+            .set_threads(cfg.threads)
+            .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
+    }
+    let out_header = make_combined_header(cfg, reader.header(), &header.sample)?;
+    let mut writer = open_htslib_writer(cfg, &out_header)?;
+    let mut call_idx = 0usize;
+    let mut record = reader.empty_record();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+        while call_idx < calls.len() && call_sorts_before_or_at_record(&calls[call_idx], &record) {
+            write_calls_bcf(&mut writer, cfg, &calls[call_idx..call_idx + 1], st)?;
+            call_idx += 1;
+        }
+        let rid = record.rid().map(|rid| rid as i32);
+        let pos1 = record.pos() + 1;
+        if rid.is_some_and(|r| consumed.contains(&(r, pos1))) {
+            continue;
+        }
+        write_one_input_record(&mut writer, record.clone(), st)?;
+    }
+    while call_idx < calls.len() {
+        write_calls_bcf(&mut writer, cfg, &calls[call_idx..call_idx + 1], st)?;
+        call_idx += 1;
+    }
+    drop(writer);
+    index_output_if_requested(cfg)?;
+    Ok(())
+}
+
 fn push_all_sites_header_records(h: &mut bcf::Header, cfg: &Config, input_header: &HeaderView) {
     h.push_record(b"##phase_mnv_emit_mode=all-sites");
     h.push_record(b"##phase_mnv_header_policy=preserve_input_header_and_append_phase_mnv_records");
@@ -3456,6 +3667,123 @@ fn make_all_sites_header(cfg: &Config, input_header: &HeaderView) -> bcf::Header
     let mut h = bcf::Header::from_template(input_header);
     push_all_sites_header_records(&mut h, cfg, input_header);
     h
+}
+
+fn header_has_info_record(input_header: &HeaderView, tag: &str) -> bool {
+    input_header
+        .header_records()
+        .iter()
+        .any(|record| match record {
+            HeaderRecord::Info { values, .. } => values.get("ID").is_some_and(|id| id == tag),
+            _ => false,
+        })
+}
+
+fn header_has_format_record(input_header: &HeaderView, tag: &str) -> bool {
+    input_header
+        .header_records()
+        .iter()
+        .any(|record| match record {
+            HeaderRecord::Format { values, .. } => values.get("ID").is_some_and(|id| id == tag),
+            _ => false,
+        })
+}
+
+fn header_has_filter_record(input_header: &HeaderView, tag: &str) -> bool {
+    input_header
+        .header_records()
+        .iter()
+        .any(|record| match record {
+            HeaderRecord::Filter { values, .. } => values.get("ID").is_some_and(|id| id == tag),
+            _ => false,
+        })
+}
+
+fn push_info_record_if_absent(
+    h: &mut bcf::Header,
+    input_header: &HeaderView,
+    tag: &str,
+    record: &[u8],
+) {
+    if !header_has_info_record(input_header, tag) {
+        h.push_record(record);
+    }
+}
+
+fn push_format_record_if_absent(
+    h: &mut bcf::Header,
+    input_header: &HeaderView,
+    tag: &str,
+    record: &[u8],
+) {
+    if !header_has_format_record(input_header, tag) {
+        h.push_record(record);
+    }
+}
+
+fn push_filter_record_if_absent(
+    h: &mut bcf::Header,
+    input_header: &HeaderView,
+    tag: &str,
+    record: &[u8],
+) {
+    if !header_has_filter_record(input_header, tag) {
+        h.push_record(record);
+    }
+}
+
+fn push_combined_header_records(h: &mut bcf::Header, cfg: &Config, input_header: &HeaderView) {
+    h.push_record(b"##phase_mnv_emit_mode=combined");
+    h.push_record(b"##phase_mnv_header_policy=preserve_input_header_subset_selected_sample_and_replace_consumed_records");
+    h.push_record(format!("##phase_mnv_input={}", cfg.input_path).as_bytes());
+    h.push_record(format!("##phase_mnv_reference={}", cfg.fasta_path).as_bytes());
+    h.push_record(format!("##phase_mnv_mnv_algorithm={}", cfg.mnv_algorithm.as_str()).as_bytes());
+    if let Some(path) = cfg.codon_map_path.as_deref() {
+        h.push_record(format!("##phase_mnv_codon_map={path}").as_bytes());
+    }
+    h.push_record(b"##phase_mnv_normalization=Tan2015_left_aligned_parsimonious");
+    h.push_record(b"##phase_mnv_normalization_citation=Tan_A_Abecasis_GR_Kang_HM_Bioinformatics_2015_31_13_2202_2204_doi_10.1093/bioinformatics/btv112");
+    push_filter_record_if_absent(
+        h,
+        input_header,
+        "PASS",
+        b"##FILTER=<ID=PASS,Description=\"All filters passed\">",
+    );
+    push_info_record_if_absent(h, input_header, "TYPE", b"##INFO=<ID=TYPE,Number=1,Type=String,Description=\"Merged call type: MNV for pure SNV blocks, COMPLEX when indels are included\">");
+    push_info_record_if_absent(h, input_header, "NVAR", b"##INFO=<ID=NVAR,Number=1,Type=Integer,Description=\"Number of phased source variants merged into this call\">");
+    push_info_record_if_absent(h, input_header, "NSNPS", b"##INFO=<ID=NSNPS,Number=1,Type=Integer,Description=\"Number of source SNVs in this merged call\">");
+    push_info_record_if_absent(h, input_header, "END", b"##INFO=<ID=END,Number=1,Type=Integer,Description=\"End coordinate of merged reference span\">");
+    push_info_record_if_absent(h, input_header, "SOURCE_POS", b"##INFO=<ID=SOURCE_POS,Number=.,Type=Integer,Description=\"Original source variant positions merged into this call\">");
+    push_info_record_if_absent(h, input_header, "HAPS", b"##INFO=<ID=HAPS,Number=.,Type=Integer,Description=\"One-based phased haplotypes carrying this merged call\">");
+    push_info_record_if_absent(h, input_header, "PS", b"##INFO=<ID=PS,Number=1,Type=Integer,Description=\"Phase set shared by merged variants, when present in input FORMAT/PS\">");
+    push_format_record_if_absent(h, input_header, "GT", b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Phased genotype for the constructed call in the selected sample\">");
+    match cfg.phase_tag {
+        PhaseTag::Ps => push_format_record_if_absent(
+            h,
+            input_header,
+            "PS",
+            b"##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase set for the constructed call, or missing if absent/ambiguous\">",
+        ),
+        PhaseTag::Hp => push_format_record_if_absent(
+            h,
+            input_header,
+            "HP",
+            b"##FORMAT=<ID=HP,Number=.,Type=String,Description=\"Phasing haplotype identifier assigned by phase_mnv_rs\">",
+        ),
+    };
+}
+
+fn make_combined_header(
+    cfg: &Config,
+    input_header: &HeaderView,
+    sample: &str,
+) -> Result<bcf::Header, String> {
+    let mut h =
+        bcf::Header::from_template_subset(input_header, &[sample.as_bytes()]).map_err(|e| {
+            format!("failed to subset combined output header to sample '{sample}': {e}")
+        })?;
+    push_combined_header_records(&mut h, cfg, input_header);
+    Ok(h)
 }
 
 fn open_htslib_writer(cfg: &Config, header: &bcf::Header) -> Result<bcf::Writer, String> {
@@ -3641,6 +3969,8 @@ fn run_all_sites(cfg: &Config) -> Result<(), String> {
         st.emitted += 1;
     }
 
+    drop(writer);
+    index_output_if_requested(cfg)?;
     print_summary(cfg, &st, &sample_label);
     Ok(())
 }
@@ -3657,7 +3987,7 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         sample
     );
     eprintln!(
-        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={} output_format={} threads={} emit={} mnv_algorithm={}",
+        "phase_mnv: settings max_gap={} min_vars={} unsupported_alleles={} warn_on_n={} no_ref_check={} no_header={} output_format={} threads={} emit={} mnv_algorithm={} write_index={}",
         cfg.max_gap,
         cfg.min_variants,
         cfg.unsupported_alleles.as_str(),
@@ -3667,7 +3997,10 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
         infer_output_kind(cfg).as_str(),
         cfg.threads,
         cfg.emit_mode.as_str(),
-        cfg.mnv_algorithm.as_str()
+        cfg.mnv_algorithm.as_str(),
+        cfg.output_index
+            .map(OutputIndexKind::as_str)
+            .unwrap_or("none")
     );
     if let Some(bam_path) = cfg.phase_bam_path.as_deref() {
         eprintln!(
@@ -3723,6 +4056,7 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
 
 fn run() -> Result<(), String> {
     let cfg = parse_args();
+    validate_index_request(&cfg)?;
     if cfg.emit_mode == EmitMode::AllSites {
         return run_all_sites(&cfg);
     }
@@ -3741,6 +4075,12 @@ fn run() -> Result<(), String> {
 
     let mut calls = build_calls(&cfg, &header, fai.0, &mut obs)?;
     merge_duplicate_calls(&mut calls);
+
+    if cfg.emit_mode == EmitMode::Combined {
+        run_combined(&cfg, &header, &calls, &mut st)?;
+        print_summary(&cfg, &st, &header.sample);
+        return Ok(());
+    }
 
     match (cfg.output_path.as_deref(), infer_output_kind(&cfg)) {
         (None | Some("-"), OutputKind::PlainVcf) => {
@@ -3789,6 +4129,7 @@ fn run() -> Result<(), String> {
         }
     }
 
+    index_output_if_requested(&cfg)?;
     print_summary(&cfg, &st, &header.sample);
     Ok(())
 }

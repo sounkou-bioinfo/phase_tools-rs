@@ -13,6 +13,8 @@ ref="$tmp/ref.fa"
 help="$tmp/help.txt"
 "$bin" --help > "$help"
 grep -q -- "--unsupported-alleles MODE" "$help"
+grep -q -- "--write-index" "$help"
+grep -q -- "combined" "$help"
 grep -q -- "--warn-on-n" "$help"
 grep -q "Multi-allelic input sites use the ALT allele selected" "$help"
 grep -q "unselected ALTs are ignored and output" "$help"
@@ -35,6 +37,9 @@ run_body() {
 
 run_body "$fixtures/phased_mnv.vcf" "$tmp/phased.body"
 diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/phased.body"
+
+run_body "$fixtures/phased_mnv.vcf" "$tmp/combined.body" --emit combined
+diff -u "$fixtures/combined.expected.body.vcf" "$tmp/combined.body"
 
 if command -v bcftools >/dev/null 2>&1; then
   bcftools view -Ob -o "$tmp/phased.bcf" "$fixtures/phased_mnv.vcf"

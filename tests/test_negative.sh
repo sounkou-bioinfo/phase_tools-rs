@@ -76,6 +76,18 @@ expect_fail "negative max gap" \
   "max-gap must be >= 0" \
   "$bin" -r "$ref" --max-gap -1 -s S1 "$valid_vcf"
 
+expect_fail "write-index plain VCF" \
+  "write-index cannot index plain VCF" \
+  "$bin" -r "$ref" -s S1 --write-index -o "$tmp/out.vcf" "$valid_vcf"
+
+expect_fail "write-index tbi bcf" \
+  "BCF output requires CSI" \
+  "$bin" -r "$ref" -s S1 --write-index=tbi -o "$tmp/out.bcf" "$valid_vcf"
+
+expect_fail "combined no-header" \
+  "combined preserves the original VCF/BCF header" \
+  "$bin" -r "$ref" -s S1 --emit combined --no-header "$valid_vcf"
+
 expect_fail "REF FASTA mismatch" \
   "REF/FASTA mismatch|Use --no-ref-check" \
   "$bin" -r "$ref" -s S1 "$fixtures/ref_mismatch.vcf"

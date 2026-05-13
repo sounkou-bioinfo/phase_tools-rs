@@ -20,9 +20,14 @@ options:
                         .bcf = BCF; stdout defaults to plain VCF
   -@, --threads N        Extra htslib/BGZF threads for decompression and
                         compressed output (default: 1)
-      --emit MODE        Output mode: mnv (default) or all-sites. all-sites
-                        is Rust-only, preserves input records/header, and
-                        updates GT/PS when used with --phase-from-bam
+      --write-index[=FMT]
+                        Build an index after writing -o output. FMT is csi
+                        (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf
+      --emit MODE        Output mode: mnv (default), combined, or all-sites.
+                        combined emits merged MNV/COMPLEX records plus input
+                        variants not consumed by a merge; all-sites preserves
+                        input records/header and updates GT/PS when used with
+                        --phase-from-bam
   -g, --max-gap N        Allow up to N unchanged reference bases between
                         phased variants when building one merged call (default: 0)
       --mnv-algorithm MODE
@@ -96,8 +101,14 @@ Notes:
     recomposes phased SNVs sharing a codon key from --codon-map.
   * Output format is inferred from -o/--output. BCF output always includes
     a VCF/BCF header even if --no-header is set.
+  * --emit combined keeps the original VCF/BCF header for the selected
+    sample, appends phase_mnv metadata, and replaces consumed source
+    records with constructed MNV/COMPLEX records.
   * --emit all-sites keeps the original VCF/BCF header via htslib and
     appends phase_mnv metadata instead of replacing it.
+  * --write-index builds a CSI sidecar by default after the output file is
+    closed. Use --write-index=tbi for a tabix/TBI index on BGZF VCF.
+    Indexing requires coordinate-sorted .vcf.gz/.vcf.bgz/.bcf output.
   * Unless --quiet is set, summary stats go to stderr and include
     input/reference/output (output=stdout for VCF stdout), settings,
     skip counts, unsupported categories, and N counts.

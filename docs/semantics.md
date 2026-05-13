@@ -22,15 +22,21 @@ This document defines the currently supported semantics for the Rust-only
 ## Output and indexing model
 
 `phase_mnv_rs` infers output format only from `-o/--output`. Use `.vcf.gz`,
-`.vcf.bgz`, or `.bcf` for files that must be `bcftools index`-able. Plain
-`.vcf` output and stdout are intentionally ordinary uncompressed VCF and cannot
-be indexed by bcftools. In particular, shell redirection such as
+`.vcf.bgz`, or `.bcf` for files that must be indexable. Plain `.vcf` output and
+stdout are intentionally ordinary uncompressed VCF and cannot be indexed by
+bcftools. In particular, shell redirection such as
 `phase_mnv_rs ... > out.vcf.gz` creates a plain VCF byte stream with a misleading
 file name; use `-o out.vcf.gz` to request BGZF-compressed VCF.
 
-Tracked output-format tests require constructed MNV VCF.GZ, VCF.BGZ, BCF, and
-BAM-phased all-sites VCF.GZ outputs to be readable and indexable by bcftools
-when bcftools is available.
+`--write-index` builds an index after the output writer is closed. The default is
+CSI (`out.vcf.gz.csi`, `out.vcf.bgz.csi`, or `out.bcf.csi`); use
+`--write-index=tbi` when a tabix/TBI sidecar is specifically wanted for BGZF VCF.
+BCF output requires CSI. As with `bcftools index`, the output must be coordinate
+sorted.
+
+Tracked output-format tests require constructed MNV VCF.GZ, VCF.BGZ, BCF,
+self-indexed VCF.GZ/BCF, combined VCF.GZ, and BAM-phased all-sites VCF.GZ outputs
+to be readable and indexable by bcftools when bcftools is available.
 
 ## BAM-backed phasing
 
@@ -173,6 +179,17 @@ biallelic merged haplotype records, not the whole input VCF/BCF.
   merged into one output line with `GT=1|1` and `HAPS=1,2`.
 - If haplotypes produce different ALT haplotypes over the same region, they are
   emitted as separate biallelic records, one per ALT haplotype.
+
+The Rust-only `--emit combined` mode preserves the input VCF/BCF header for the
+selected sample, appends `phase_mnv` metadata/header records, and writes both:
+
+- constructed MNV/COMPLEX records; and
+- original input records whose positions were not consumed by an emitted merge.
+
+Consumption is currently record-position based: if an emitted constructed record
+lists a source position in `SOURCE_POS`, the original record at that position is
+replaced in combined output. `--emit combined` currently requires input-phased
+VCF/BCF and does not support `--phase-from-bam` or `--no-header`.
 
 The Rust-only `--emit all-sites` mode instead preserves every input VCF/BCF
 record and keeps the original input header by duplicating it through htslib, then
@@ -334,7 +351,7 @@ explicit output destination:
 
 ```text
 phase_mnv: input=... reference=... output=stdout sample=...
-phase_mnv: settings max_gap=... min_vars=... unsupported_alleles=... warn_on_n=... no_ref_check=... no_header=... output_format=... threads=... emit=... mnv_algorithm=...
+phase_mnv: settings max_gap=... min_vars=... unsupported_alleles=... warn_on_n=... no_ref_check=... no_header=... output_format=... threads=... emit=... mnv_algorithm=... write_index=...
 phase_mnv: records=... phased_records=... haplotype_variant_observations=... emitted_calls=...
 phase_mnv: skipped no_gt=... non_diploid=... missing_gt=... unphased=... ref_hap_alleles=...
 phase_mnv: unsupported ref_non_dna=... alt_out_of_range=... alt_symbolic_or_breakend=... alt_spanning_deletion=... alt_non_dna=... alt_same_as_ref=... unsupported_alt_total=...
