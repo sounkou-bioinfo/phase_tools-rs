@@ -184,12 +184,20 @@ The Rust-only `--emit combined` mode preserves the input VCF/BCF header for the
 selected sample, appends `phase_mnv` metadata/header records, and writes both:
 
 - constructed MNV/COMPLEX records; and
-- original input records whose positions were not consumed by an emitted merge.
+- residual selected-sample input records carrying ALT alleles not represented by
+  an emitted merge.
 
-Consumption is currently record-position based: if an emitted constructed record
-lists a source position in `SOURCE_POS`, the original record at that position is
-replaced in combined output. `--emit combined` currently requires input-phased
-VCF/BCF and does not support `--phase-from-bam` or `--no-header`.
+Consumption is source-record- and haplotype/allele-aware for the selected
+sample. If a source record is fully represented by constructed records, it is
+omitted. If only some haplotype alleles from a multi-allelic or partially merged
+record are consumed, the residual input record is kept only when the selected
+sample still carries an unmerged ALT allele; consumed alleles are removed where
+possible and consumed haplotypes are reset to reference in `GT`. Multi-sample
+inputs are subset to the selected sample in combined output, records that are
+variant only in other samples are omitted, and common cohort aggregate INFO tags
+(`AC`, `AN`, `AF`, `MLEAC`, `MLEAF`, `NS`) are stripped from preserved input
+records after sample subsetting. `--emit combined` currently requires
+input-phased VCF/BCF and does not support `--phase-from-bam` or `--no-header`.
 
 The Rust-only `--emit all-sites` mode instead preserves every input VCF/BCF
 record and keeps the original input header by duplicating it through htslib, then

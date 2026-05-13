@@ -58,10 +58,10 @@ output file is closed, or `--write-index=tbi` for a tabix/TBI sidecar on BGZF
 VCF. Use `--threads N` / `-@ N` for htslib/BGZF worker threads.
 
 The default `--emit mnv` output contains only constructed MNV/COMPLEX records.
-Use `--emit combined` when you want constructed records plus original input
-variants that were not consumed by any emitted merge. `--emit all-sites` remains
-the mode for preserving every input record, with optional BAM-backed phase tag
-updates.
+Use `--emit combined` when you want constructed records plus selected-sample
+input variants that are not represented by any emitted merge. `--emit all-sites`
+remains the mode for preserving every input record, with optional BAM-backed
+phase tag updates.
 
 ## Minimal MNV example
 

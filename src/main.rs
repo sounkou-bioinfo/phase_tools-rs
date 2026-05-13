@@ -1,7 +1,7 @@
 use libc::c_void;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read as BamRead};
-use rust_htslib::bcf::header::{HeaderRecord, HeaderView};
+use rust_htslib::bcf::header::{HeaderRecord, HeaderView, TagType};
 use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::bcf::{self, Read as BcfRead};
 use rust_htslib::htslib;
@@ -171,6 +171,15 @@ struct HeaderInfo {
     rid_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SourceHaplotype {
+    source_record: u64,
+    rid: i32,
+    pos: i64,
+    hap: i32,
+    allele: i32,
+}
+
 #[derive(Debug, Clone)]
 struct Obs {
     rid: i32,
@@ -178,6 +187,8 @@ struct Obs {
     ps: i64,
     pos: i64,
     end: i64,
+    source_record: u64,
+    source_allele: i32,
     ref_allele: String,
     alt_allele: String,
     is_snv: bool,
@@ -197,6 +208,7 @@ struct MnvCall {
     call_type: &'static str,
     hap_mask: i32,
     ps: i64,
+    source_haplotypes: Vec<SourceHaplotype>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -230,6 +242,7 @@ struct Stats {
 
 #[derive(Debug, Clone)]
 struct PhaseCandidate {
+    source_record: u64,
     rid: i32,
     chrom: String,
     pos: i64,
@@ -431,10 +444,10 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "                        Build an index after writing -o output. FMT is csi\n",
             "                        (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf\n",
             "      --emit MODE        Output mode: mnv (default), combined, or all-sites.\n",
-            "                        combined emits merged MNV/COMPLEX records plus input\n",
-            "                        variants not consumed by a merge; all-sites preserves\n",
-            "                        input records/header and updates GT/PS when used with\n",
-            "                        --phase-from-bam\n",
+            "                        combined emits merged MNV/COMPLEX records plus\n",
+            "                        selected-sample input variants not represented by a\n",
+            "                        merge; all-sites preserves input records/header and\n",
+            "                        updates GT/PS when used with --phase-from-bam\n",
             "  -g, --max-gap N        Allow up to N unchanged reference bases between\n",
             "                        phased variants when building one merged call (default: 0)\n",
             "      --mnv-algorithm MODE\n",
@@ -509,8 +522,11 @@ fn print_usage<W: Write>(mut out: W) -> io::Result<()> {
             "  * Output format is inferred from -o/--output. BCF output always includes\n",
             "    a VCF/BCF header even if --no-header is set.\n",
             "  * --emit combined keeps the original VCF/BCF header for the selected\n",
-            "    sample, appends phase_mnv metadata, and replaces consumed source\n",
-            "    records with constructed MNV/COMPLEX records.\n",
+            "    sample, appends phase_mnv metadata, and writes constructed MNV/COMPLEX\n",
+            "    records plus residual selected-sample input records. Partial\n",
+            "    multi-allelic residuals are allele-aware; multi-sample inputs are\n",
+            "    subset to the selected sample, with common cohort INFO tags stripped\n",
+            "    after subsetting. --phase-from-bam is not supported in combined mode.\n",
             "  * --emit all-sites keeps the original VCF/BCF header via htslib and\n",
             "    appends phase_mnv metadata instead of replacing it.\n",
             "  * --write-index builds a CSI sidecar by default after the output file is\n",
@@ -2349,6 +2365,7 @@ fn candidate_from_record(
     record: &bcf::Record,
     header_info: &HeaderInfo,
     sample_idx: usize,
+    source_record: u64,
     st: &mut Stats,
     cfg: &Config,
 ) -> Result<Option<PhaseCandidate>, String> {
@@ -2453,6 +2470,7 @@ fn candidate_from_record(
         return Ok(None);
     }
     Ok(Some(PhaseCandidate {
+        source_record,
         rid: record.rid().unwrap_or(0) as i32,
         chrom: chrom.to_string(),
         pos: pos1,
@@ -2555,6 +2573,8 @@ fn add_observation_for_candidate(
         ps,
         pos: candidate.pos,
         end: candidate.end,
+        source_record: candidate.source_record,
+        source_allele: allele,
         ref_allele: ref_allele.clone(),
         alt_allele: alt_allele.clone(),
         is_snv,
@@ -2602,6 +2622,7 @@ fn read_observations_with_bam_phasing(
     while let Some(result) = reader.read(&mut record) {
         result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
         st.records += 1;
+        let source_record = st.records - 1;
         if record.alleles().len() > 2 {
             st.multiallelic_records += 1;
         }
@@ -2704,6 +2725,7 @@ fn read_observations_with_bam_phasing(
         let ref_len = alleles[0].len() as i64;
         let is_snv = alleles[a0 as usize].len() == 1 && alleles[a1 as usize].len() == 1;
         candidates.push(PhaseCandidate {
+            source_record,
             rid: record.rid().unwrap_or(0) as i32,
             chrom: chrom.to_string(),
             pos: pos1,
@@ -2793,6 +2815,7 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
     while let Some(result) = reader.read(&mut record) {
         result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
         st.records += 1;
+        let source_record = st.records - 1;
         if record.alleles().len() > 2 {
             st.multiallelic_records += 1;
         }
@@ -2923,6 +2946,8 @@ fn read_observations(cfg: &Config) -> Result<(HeaderInfo, Vec<Obs>, Stats), Stri
                 ps,
                 pos: pos1,
                 end: pos1 + ref_len - 1,
+                source_record,
+                source_allele: allele,
                 ref_allele: ref_allele.clone(),
                 alt_allele,
                 is_snv,
@@ -2975,6 +3000,18 @@ fn make_positions_string(obs: &[Obs]) -> String {
         s.push_str(&o.pos.to_string());
     }
     s
+}
+
+fn source_haplotypes_from_obs(obs: &[Obs]) -> Vec<SourceHaplotype> {
+    obs.iter()
+        .map(|o| SourceHaplotype {
+            source_record: o.source_record,
+            rid: o.rid,
+            pos: o.pos,
+            hap: o.hap,
+            allele: o.source_allele,
+        })
+        .collect()
 }
 
 fn fetch_seq(
@@ -3158,6 +3195,7 @@ fn add_call_from_block(
         call_type: if all_snvs { "MNV" } else { "COMPLEX" },
         hap_mask: 1 << a.hap,
         ps: a.ps,
+        source_haplotypes: source_haplotypes_from_obs(block),
     });
     Ok(())
 }
@@ -3260,6 +3298,10 @@ fn merge_duplicate_calls(calls: &mut Vec<MnvCall>) {
                 && last.positions == call.positions
             {
                 last.hap_mask |= call.hap_mask;
+                last.source_haplotypes.extend(call.source_haplotypes);
+                last.source_haplotypes
+                    .sort_by_key(|s| (s.source_record, s.rid, s.pos, s.hap, s.allele));
+                last.source_haplotypes.dedup();
                 if last.ps != call.ps {
                     last.ps = PS_MISSING;
                 }
@@ -3550,23 +3592,17 @@ fn write_calls_bcf(
     Ok(())
 }
 
-fn consumed_source_positions(calls: &[MnvCall]) -> Result<HashSet<(i32, i64)>, String> {
-    let mut consumed = HashSet::new();
+fn consumed_haplotypes_by_record(calls: &[MnvCall]) -> HashMap<u64, HashSet<(i32, i32)>> {
+    let mut consumed: HashMap<u64, HashSet<(i32, i32)>> = HashMap::new();
     for call in calls {
-        for pos in call.positions.split(',') {
-            if pos.is_empty() {
-                continue;
-            }
-            let pos1 = pos.parse::<i64>().map_err(|_| {
-                format!(
-                    "internal error: invalid SOURCE_POS value '{}' for combined output",
-                    pos
-                )
-            })?;
-            consumed.insert((call.rid, pos1));
+        for source in &call.source_haplotypes {
+            consumed
+                .entry(source.source_record)
+                .or_default()
+                .insert((source.hap, source.allele));
         }
     }
-    Ok(consumed)
+    consumed
 }
 
 fn call_sorts_before_or_at_record(call: &MnvCall, record: &bcf::Record) -> bool {
@@ -3575,13 +3611,67 @@ fn call_sorts_before_or_at_record(call: &MnvCall, record: &bcf::Record) -> bool 
     call.rid < record_rid || (call.rid == record_rid && call.start <= record_pos1)
 }
 
+fn genotype_has_alt(gt: &[GenotypeAllele]) -> bool {
+    gt.iter()
+        .filter_map(|&allele| allele_index(allele))
+        .any(|allele| allele > 0)
+}
+
+fn clear_info_if_present(record: &mut bcf::Record, tag: &[u8]) -> Result<(), String> {
+    let Ok((tag_type, _)) = record.header().info_type(tag) else {
+        return Ok(());
+    };
+    match tag_type {
+        TagType::Integer => record.clear_info_integer(tag),
+        TagType::Float => record.clear_info_float(tag),
+        TagType::String => record.clear_info_string(tag),
+        TagType::Flag => record.clear_info_flag(tag),
+    }
+    .map_err(|e| {
+        format!(
+            "failed to clear INFO/{} after sample subsetting: {e}",
+            String::from_utf8_lossy(tag)
+        )
+    })
+}
+
+fn clear_cohort_info_after_sample_subset(record: &mut bcf::Record) -> Result<(), String> {
+    for tag in [
+        b"AC".as_slice(),
+        b"AN".as_slice(),
+        b"AF".as_slice(),
+        b"MLEAC".as_slice(),
+        b"MLEAF".as_slice(),
+        b"NS".as_slice(),
+    ] {
+        clear_info_if_present(record, tag)?;
+    }
+    Ok(())
+}
+
 fn write_one_input_record(
     writer: &mut bcf::Writer,
     mut record: bcf::Record,
+    sample_idx: usize,
+    clear_cohort_info: bool,
     st: &mut Stats,
 ) -> Result<(), String> {
+    let selected_gt = record
+        .genotypes()
+        .ok()
+        .map(|genotypes| genotypes.get(sample_idx).to_vec());
+    if selected_gt
+        .as_deref()
+        .is_some_and(|gt| !genotype_has_alt(gt))
+    {
+        return Ok(());
+    }
+
     writer.translate(&mut record);
     writer.subset(&mut record);
+    if clear_cohort_info {
+        clear_cohort_info_after_sample_subset(&mut record)?;
+    }
     writer
         .write(&record)
         .map_err(|e| format!("failed to write unmerged input record: {e}"))?;
@@ -3589,12 +3679,112 @@ fn write_one_input_record(
     Ok(())
 }
 
-fn run_combined(
-    cfg: &Config,
-    header: &HeaderInfo,
-    calls: &[MnvCall],
+fn residual_genotype_allele(new_allele: Option<i32>, force_phased: bool) -> GenotypeAllele {
+    match new_allele {
+        Some(allele) if force_phased => GenotypeAllele::Phased(allele),
+        Some(allele) => GenotypeAllele::Unphased(allele),
+        None if force_phased => GenotypeAllele::PhasedMissing,
+        None => GenotypeAllele::UnphasedMissing,
+    }
+}
+
+fn write_residual_input_record(
+    writer: &mut bcf::Writer,
+    mut record: bcf::Record,
+    sample_idx: usize,
+    consumed_site: &HashSet<(i32, i32)>,
     st: &mut Stats,
 ) -> Result<(), String> {
+    let allele_count = record.alleles().len();
+    if allele_count <= 1 {
+        return Ok(());
+    }
+
+    let original_gt = {
+        let genotypes = record
+            .genotypes()
+            .map_err(|e| format!("failed to read GT for combined residual record: {e}"))?;
+        genotypes.get(sample_idx).to_vec()
+    };
+
+    let mut consumed_alleles = HashSet::new();
+    let mut residual_sample_alleles = HashSet::new();
+    for (hap, gt_allele) in original_gt.iter().enumerate() {
+        let Some(allele) = allele_index(*gt_allele) else {
+            continue;
+        };
+        if allele <= 0 {
+            continue;
+        }
+        if consumed_site.contains(&(hap as i32, allele)) {
+            consumed_alleles.insert(allele);
+        } else {
+            residual_sample_alleles.insert(allele);
+        }
+    }
+    for &(_, allele) in consumed_site {
+        if allele > 0 {
+            consumed_alleles.insert(allele);
+        }
+    }
+
+    let mut remove = vec![false; allele_count];
+    for allele in 1..allele_count {
+        let allele_i = allele as i32;
+        remove[allele] =
+            consumed_alleles.contains(&allele_i) && !residual_sample_alleles.contains(&allele_i);
+    }
+    if remove.iter().skip(1).all(|&remove_allele| remove_allele) {
+        return Ok(());
+    }
+
+    let mut old_to_new = vec![None; allele_count];
+    old_to_new[0] = Some(0);
+    let mut next_allele = 1i32;
+    for allele in 1..allele_count {
+        if !remove[allele] {
+            old_to_new[allele] = Some(next_allele);
+            next_allele += 1;
+        }
+    }
+
+    let mut residual_gt = Vec::with_capacity(original_gt.len());
+    for (hap, gt_allele) in original_gt.iter().enumerate() {
+        let new_allele = match allele_index(*gt_allele) {
+            Some(allele) if allele > 0 && consumed_site.contains(&(hap as i32, allele)) => Some(0),
+            Some(allele) if allele >= 0 => old_to_new.get(allele as usize).copied().flatten(),
+            Some(_) | None => None,
+        };
+        let force_phased = hap > 0 && is_phased_after_first(*gt_allele);
+        residual_gt.push(residual_genotype_allele(new_allele, force_phased));
+    }
+
+    if !genotype_has_alt(&residual_gt) {
+        return Ok(());
+    }
+
+    writer.translate(&mut record);
+    writer.subset(&mut record);
+    if remove.iter().any(|&remove_allele| remove_allele) {
+        record
+            .remove_alleles(&remove)
+            .map_err(|e| format!("failed to remove consumed alleles from residual record: {e}"))?;
+    }
+    record
+        .push_genotypes(&residual_gt)
+        .map_err(|e| format!("failed to update residual combined GT: {e}"))?;
+    clear_cohort_info_after_sample_subset(&mut record)?;
+    writer
+        .write(&record)
+        .map_err(|e| format!("failed to write residual input record: {e}"))?;
+    st.emitted += 1;
+    Ok(())
+}
+
+fn validate_combined_request(cfg: &Config) -> Result<(), String> {
+    if cfg.emit_mode != EmitMode::Combined {
+        return Ok(());
+    }
     if cfg.no_header {
         return Err(
             "--emit combined preserves the original VCF/BCF header; --no-header is not supported"
@@ -3604,8 +3794,18 @@ fn run_combined(
     if cfg.phase_bam_path.is_some() {
         return Err("--emit combined currently requires input-phased VCF/BCF; --phase-from-bam is supported with --emit mnv or --emit all-sites".to_string());
     }
+    Ok(())
+}
 
-    let consumed = consumed_source_positions(calls)?;
+fn run_combined(
+    cfg: &Config,
+    header: &HeaderInfo,
+    calls: &[MnvCall],
+    st: &mut Stats,
+) -> Result<(), String> {
+    validate_combined_request(cfg)?;
+
+    let consumed = consumed_haplotypes_by_record(calls);
     let mut reader = bcf::Reader::from_path(&cfg.input_path)
         .map_err(|e| format!("cannot open input '{}': {}", cfg.input_path, e))?;
     if cfg.threads > 1 {
@@ -3613,22 +3813,46 @@ fn run_combined(
             .set_threads(cfg.threads)
             .map_err(|e| format!("failed to enable VCF/BCF input threads: {e}"))?;
     }
+    let clear_cohort_info = reader.header().sample_count() > 1;
+    let sample_idx = reader
+        .header()
+        .sample_id(header.sample.as_bytes())
+        .ok_or_else(|| {
+            format!(
+                "sample '{}' not found while writing combined output",
+                header.sample
+            )
+        })?;
     let out_header = make_combined_header(cfg, reader.header(), &header.sample)?;
     let mut writer = open_htslib_writer(cfg, &out_header)?;
     let mut call_idx = 0usize;
+    let mut record_ordinal = 0u64;
     let mut record = reader.empty_record();
     while let Some(result) = reader.read(&mut record) {
         result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+        let source_record = record_ordinal;
+        record_ordinal += 1;
         while call_idx < calls.len() && call_sorts_before_or_at_record(&calls[call_idx], &record) {
             write_calls_bcf(&mut writer, cfg, &calls[call_idx..call_idx + 1], st)?;
             call_idx += 1;
         }
-        let rid = record.rid().map(|rid| rid as i32);
-        let pos1 = record.pos() + 1;
-        if rid.is_some_and(|r| consumed.contains(&(r, pos1))) {
-            continue;
+        if let Some(consumed_site) = consumed.get(&source_record) {
+            write_residual_input_record(
+                &mut writer,
+                record.clone(),
+                sample_idx,
+                consumed_site,
+                st,
+            )?;
+        } else {
+            write_one_input_record(
+                &mut writer,
+                record.clone(),
+                sample_idx,
+                clear_cohort_info,
+                st,
+            )?;
         }
-        write_one_input_record(&mut writer, record.clone(), st)?;
     }
     while call_idx < calls.len() {
         write_calls_bcf(&mut writer, cfg, &calls[call_idx..call_idx + 1], st)?;
@@ -3909,9 +4133,15 @@ fn run_all_sites(cfg: &Config) -> Result<(), String> {
         while let Some(result) = planning_reader.read(&mut record) {
             result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
             st.records += 1;
-            if let Some(candidate) =
-                candidate_from_record(&record, &header_info, sample_idx, &mut st, cfg)?
-            {
+            let source_record = st.records - 1;
+            if let Some(candidate) = candidate_from_record(
+                &record,
+                &header_info,
+                sample_idx,
+                source_record,
+                &mut st,
+                cfg,
+            )? {
                 candidates.push(candidate);
             }
         }
@@ -3935,17 +4165,25 @@ fn run_all_sites(cfg: &Config) -> Result<(), String> {
     };
     let mut writer = open_htslib_writer(cfg, &out_header)?;
     let mut candidate_cursor = 0usize;
+    let mut record_ordinal = 0u64;
     let mut record = reader.empty_record();
     while let Some(result) = reader.read(&mut record) {
         result.map_err(|e| format!("failed to read VCF/BCF record: {e}"))?;
+        let source_record = record_ordinal;
+        record_ordinal += 1;
         if cfg.phase_bam_path.is_none() {
             st.records += 1;
         }
         let maybe_assignment = if let Some(header_info) = header_info.as_ref() {
             let mut dummy = Stats::default();
-            if let Some(candidate) =
-                candidate_from_record(&record, header_info, sample_idx, &mut dummy, cfg)?
-            {
+            if let Some(candidate) = candidate_from_record(
+                &record,
+                header_info,
+                sample_idx,
+                source_record,
+                &mut dummy,
+                cfg,
+            )? {
                 let idx = candidate_cursor;
                 candidate_cursor += 1;
                 assignments_by_index
@@ -4057,6 +4295,7 @@ fn print_summary(cfg: &Config, st: &Stats, sample: &str) {
 fn run() -> Result<(), String> {
     let cfg = parse_args();
     validate_index_request(&cfg)?;
+    validate_combined_request(&cfg)?;
     if cfg.emit_mode == EmitMode::AllSites {
         return run_all_sites(&cfg);
     }

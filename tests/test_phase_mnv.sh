@@ -41,10 +41,45 @@ diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/phased.body"
 run_body "$fixtures/phased_mnv.vcf" "$tmp/combined.body" --emit combined
 diff -u "$fixtures/combined.expected.body.vcf" "$tmp/combined.body"
 
+run_body "$fixtures/combined_multiallelic_partial.vcf" "$tmp/combined_multiallelic_partial.body" --emit combined
+diff -u "$fixtures/combined_multiallelic_partial.expected.body.vcf" "$tmp/combined_multiallelic_partial.body"
+
+run_body "$fixtures/combined_same_position_records.vcf" "$tmp/combined_same_position_records.body" --emit combined
+diff -u "$fixtures/combined_same_position_records.expected.body.vcf" "$tmp/combined_same_position_records.body"
+
+run_body "$fixtures/combined_multisample.vcf" "$tmp/combined_multisample.body" --emit combined
+diff -u "$fixtures/combined_multisample.expected.body.vcf" "$tmp/combined_multisample.body"
+
+run_body "$fixtures/combined_multisample_info.vcf" "$tmp/combined_multisample_info.body" --emit combined
+diff -u "$fixtures/combined_multisample_info.expected.body.vcf" "$tmp/combined_multisample_info.body"
+
+run_body "$fixtures/combined_residual_other_sample_only.vcf" "$tmp/combined_residual_other_sample_only.body" --emit combined
+diff -u "$fixtures/combined_residual_other_sample_only.expected.body.vcf" "$tmp/combined_residual_other_sample_only.body"
+
+run_body "$fixtures/combined_single_sample_info.vcf" "$tmp/combined_single_sample_info.body" --emit combined
+diff -u "$fixtures/combined_single_sample_info.expected.body.vcf" "$tmp/combined_single_sample_info.body"
+
+"$bin" -q -r "$ref" -s S1 --emit combined "$fixtures/combined_multisample.vcf" > "$tmp/combined_multisample.vcf"
+grep -qx $'#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1' "$tmp/combined_multisample.vcf"
+! grep -q $'\tS2' "$tmp/combined_multisample.vcf"
+
+"$bin" -q -r "$ref" -s S2 --emit combined "$fixtures/combined_multisample.vcf" > "$tmp/combined_multisample_s2.vcf"
+grep -qx $'#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS2' "$tmp/combined_multisample_s2.vcf"
+grep -v '^#' "$tmp/combined_multisample_s2.vcf" > "$tmp/combined_multisample_s2.body" || true
+diff -u "$fixtures/combined_multisample_s2.expected.body.vcf" "$tmp/combined_multisample_s2.body"
+
 if command -v bcftools >/dev/null 2>&1; then
   bcftools view -Ob -o "$tmp/phased.bcf" "$fixtures/phased_mnv.vcf"
   run_body "$tmp/phased.bcf" "$tmp/phased_bcf.body"
   diff -u "$fixtures/phased_mnv.expected.body.vcf" "$tmp/phased_bcf.body"
+
+  bcftools view -Ob -o "$tmp/combined_multiallelic_partial.bcf" "$fixtures/combined_multiallelic_partial.vcf"
+  run_body "$tmp/combined_multiallelic_partial.bcf" "$tmp/combined_multiallelic_partial_bcf.body" --emit combined
+  diff -u "$fixtures/combined_multiallelic_partial.expected.body.vcf" "$tmp/combined_multiallelic_partial_bcf.body"
+
+  bcftools view -Ob -o "$tmp/combined_multisample_info.bcf" "$fixtures/combined_multisample_info.vcf"
+  run_body "$tmp/combined_multisample_info.bcf" "$tmp/combined_multisample_info_bcf.body" --emit combined
+  diff -u "$fixtures/combined_multisample_info.expected.body.vcf" "$tmp/combined_multisample_info_bcf.body"
 fi
 
 run_body "$fixtures/gap.vcf" "$tmp/gap0.body"

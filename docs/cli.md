@@ -24,10 +24,10 @@ options:
                         Build an index after writing -o output. FMT is csi
                         (default) or tbi; requires .vcf.gz/.vcf.bgz/.bcf
       --emit MODE        Output mode: mnv (default), combined, or all-sites.
-                        combined emits merged MNV/COMPLEX records plus input
-                        variants not consumed by a merge; all-sites preserves
-                        input records/header and updates GT/PS when used with
-                        --phase-from-bam
+                        combined emits merged MNV/COMPLEX records plus
+                        selected-sample input variants not represented by a
+                        merge; all-sites preserves input records/header and
+                        updates GT/PS when used with --phase-from-bam
   -g, --max-gap N        Allow up to N unchanged reference bases between
                         phased variants when building one merged call (default: 0)
       --mnv-algorithm MODE
@@ -102,8 +102,11 @@ Notes:
   * Output format is inferred from -o/--output. BCF output always includes
     a VCF/BCF header even if --no-header is set.
   * --emit combined keeps the original VCF/BCF header for the selected
-    sample, appends phase_mnv metadata, and replaces consumed source
-    records with constructed MNV/COMPLEX records.
+    sample, appends phase_mnv metadata, and writes constructed MNV/COMPLEX
+    records plus residual selected-sample input records. Partial
+    multi-allelic residuals are allele-aware; multi-sample inputs are
+    subset to the selected sample, with common cohort INFO tags stripped
+    after subsetting. --phase-from-bam is not supported in combined mode.
   * --emit all-sites keeps the original VCF/BCF header via htslib and
     appends phase_mnv metadata instead of replacing it.
   * --write-index builds a CSI sidecar by default after the output file is

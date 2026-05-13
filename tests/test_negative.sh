@@ -88,6 +88,10 @@ expect_fail "combined no-header" \
   "combined preserves the original VCF/BCF header" \
   "$bin" -r "$ref" -s S1 --emit combined --no-header "$valid_vcf"
 
+expect_fail "combined phase-from-bam" \
+  "combined currently requires input-phased VCF/BCF" \
+  "$bin" -r "$ref" -s S1 --emit combined --phase-from-bam "$fixtures/read_phase.bam" "$valid_vcf"
+
 expect_fail "REF FASTA mismatch" \
   "REF/FASTA mismatch|Use --no-ref-check" \
   "$bin" -r "$ref" -s S1 "$fixtures/ref_mismatch.vcf"
