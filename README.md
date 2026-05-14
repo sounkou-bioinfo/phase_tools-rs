@@ -31,7 +31,8 @@ Full generated CLI help lives in [`docs/cli.md`](docs/cli.md).
 `multi_region_joint_detect --vcf` writes a diagnostic plain VCF sidecar with one
 record per alt-positive region observation. `EVENT`/`EVENTTYPE` link homologous
 observations for the same grouped offset; string INFO values are percent-escaped
-for VCF safety.
+for VCF safety. MAPQ 255 reads are retained when no MAPQ threshold is requested
+and otherwise treated as unknown mapping quality unless `--keep-mapq-255` is set.
 
 ## Quick start
 

@@ -1,10 +1,11 @@
 use phase_tools::io::fasta::Fai;
+use phase_tools::io::vcf::infer_output_kind;
 use phase_tools::mrjd::{
-    detect_snv_candidates, read_regions_tsv, CandidateConfig, JointCandidate, Region,
+    detect_snv_candidates_with_mapq255_policy, read_regions_tsv, write_candidates_tsv,
+    write_diagnostic_vcf, CandidateConfig, Mapq255Policy,
 };
-use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 
 fn usage() -> &'static str {
@@ -17,7 +18,8 @@ Depth/count totals are over alt-positive region observations; ref-only or\n\
 uncovered copies are counted in region_count but omitted from per_region. The\n\
 VCF sidecar emits one record per alt-positive region observation. String INFO\n\
 values are percent-escaped. Duplicate, QC-fail, secondary, and supplementary\n\
-records are excluded. MAPQ 255 is excluded only when --min-mapq is greater than 0.\n\n\
+records are excluded. MAPQ 255 is retained when no MAPQ threshold is requested\n\
+and otherwise dropped as unknown unless --keep-mapq-255 is set.\n\n\
 regions.tsv columns:\n\
   group<TAB>chrom<TAB>start<TAB>end[<TAB>copy]\n\n\
 options:\n\
@@ -27,6 +29,7 @@ options:\n\
       --min-baseq N          Minimum base quality (default: 13)\n\
       --min-alt-count N      Minimum per-region alt count (default: 2)\n\
       --min-alt-fraction F   Minimum per-region alt fraction (default: 0.20)\n\
+      --keep-mapq-255        Keep MAPQ 255 reads even when --min-mapq > 0\n\
   -@, --threads N            BAM/CRAM reader threads (default: 1)\n\
   -o, --output FILE          Output TSV path (default: stdout)\n\
       --vcf FILE             Write diagnostic VCF sidecar with EVENT/EVENTTYPE\n\
@@ -42,6 +45,7 @@ struct Config {
     threads: usize,
     output: Option<String>,
     vcf: Option<String>,
+    keep_mapq_255: bool,
 }
 
 fn die(msg: &str) -> ! {
@@ -92,10 +96,20 @@ fn normalized_output_path(path: &str) -> Result<PathBuf, String> {
     Ok(parent.join(file_name))
 }
 
+fn validate_vcf_sidecar_path(path: &str) -> Result<(), String> {
+    if infer_output_kind(Some(path)).is_indexable() {
+        return Err(
+            "--vcf currently writes plain diagnostic VCF; use a .vcf or non-indexable suffix, not .vcf.gz, .vcf.bgz, or .bcf".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_output_paths(cfg: &Config) -> Result<(), String> {
     let Some(vcf) = cfg.vcf.as_deref() else {
         return Ok(());
     };
+    validate_vcf_sidecar_path(vcf)?;
     if let Some(output) = cfg.output.as_deref().filter(|path| *path != "-") {
         if normalized_output_path(output)? == normalized_output_path(vcf)? {
             return Err("--output and --vcf must be different paths".to_string());
@@ -117,6 +131,7 @@ fn parse_args() -> Config {
     let mut threads = 1usize;
     let mut output = None;
     let mut vcf = None;
+    let mut keep_mapq_255 = false;
     let mut positional = Vec::new();
 
     let mut i = 0usize;
@@ -163,6 +178,9 @@ fn parse_args() -> Config {
                     die("--min-alt-fraction requires an argument");
                 }
                 candidate.min_alt_fraction = parse_f64(&args[i], "--min-alt-fraction");
+            }
+            "--keep-mapq-255" => {
+                keep_mapq_255 = true;
             }
             "-@" | "--threads" => {
                 i += 1;
@@ -211,161 +229,8 @@ fn parse_args() -> Config {
         threads,
         output,
         vcf,
+        keep_mapq_255,
     }
-}
-
-fn format_observations(candidate: &JointCandidate) -> String {
-    candidate
-        .observations
-        .iter()
-        .map(|obs| {
-            format!(
-                "{}|{}:{}|{}|{}|{}|{:.6}",
-                obs.copy,
-                obs.chrom,
-                obs.pos1,
-                obs.ref_base as char,
-                obs.depth,
-                obs.alt_count,
-                obs.alt_fraction
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
-fn write_candidates<W: Write>(mut out: W, candidates: &[JointCandidate]) -> Result<(), String> {
-    writeln!(
-        out,
-        "group\toffset1\talt\talt_positive_depth\talt_positive_alt_count\tregions_with_alt\tregion_count\tper_region"
-    )
-    .map_err(|e| format!("failed to write output: {e}"))?;
-    for candidate in candidates {
-        writeln!(
-            out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            candidate.group,
-            candidate.offset1,
-            candidate.alt_base as char,
-            candidate.alt_positive_depth,
-            candidate.alt_positive_alt_count,
-            candidate.regions_with_alt,
-            candidate.region_count,
-            format_observations(candidate)
-        )
-        .map_err(|e| format!("failed to write output: {e}"))?;
-    }
-    Ok(())
-}
-
-fn vcf_escape(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b':' => {
-                out.push(byte as char);
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-fn event_id(candidate: &JointCandidate) -> String {
-    format!(
-        "MRJD:{}:{}:{}",
-        vcf_escape(&candidate.group),
-        candidate.offset1,
-        candidate.alt_base as char
-    )
-}
-
-fn write_vcf_sidecar(
-    path: &str,
-    regions: &[Region],
-    candidates: &[JointCandidate],
-) -> Result<(), String> {
-    let file = File::create(Path::new(path))
-        .map_err(|e| format!("cannot create VCF sidecar '{path}': {e}"))?;
-    let mut out = BufWriter::new(file);
-    writeln!(out, "##fileformat=VCFv4.3").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##source=phase_tools-rs_multi_region_joint_detect")
-        .map_err(|e| format!("failed to write VCF: {e}"))?;
-    let contigs = regions
-        .iter()
-        .map(|region| region.chrom.as_str())
-        .collect::<BTreeSet<_>>();
-    for contig in contigs {
-        writeln!(out, "##contig=<ID={}>", vcf_escape(contig))
-            .map_err(|e| format!("failed to write VCF: {e}"))?;
-    }
-    writeln!(out, "##INFO=<ID=EVENT,Number=1,Type=String,Description=\"Multi-region joint-detection event identifier shared by homologous observations\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=EVENTTYPE,Number=1,Type=String,Description=\"Event class; currently MRJD_SNV for diagnostic SNV evidence\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_GROUP,Number=1,Type=String,Description=\"Region group from the multi-region manifest\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_COPY,Number=1,Type=String,Description=\"Copy/region label from the multi-region manifest\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_OFFSET,Number=1,Type=Integer,Description=\"1-based offset within the grouped region\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_REGIONS_WITH_ALT,Number=1,Type=Integer,Description=\"Number of regions in this group with alt-positive evidence for the event\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_REGION_COUNT,Number=1,Type=Integer,Description=\"Number of manifest regions in this group covering the event offset\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_ALT_POSITIVE_DEPTH,Number=1,Type=Integer,Description=\"Summed depth across alt-positive region observations only\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_ALT_POSITIVE_ALT_COUNT,Number=1,Type=Integer,Description=\"Summed alt count across alt-positive region observations only\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_COPY_DEPTH,Number=1,Type=Integer,Description=\"Depth for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_COPY_ALT_COUNT,Number=1,Type=Integer,Description=\"Alt count for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "##INFO=<ID=MRJD_COPY_ALT_FRACTION,Number=1,Type=Float,Description=\"Alt fraction for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
-    writeln!(out, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
-        .map_err(|e| format!("failed to write VCF: {e}"))?;
-
-    let mut rows = Vec::new();
-    for candidate in candidates {
-        let event = event_id(candidate);
-        for obs in &candidate.observations {
-            rows.push((
-                obs.chrom.clone(),
-                obs.pos1,
-                obs.ref_base as char,
-                candidate.alt_base as char,
-                event.clone(),
-                candidate,
-                obs,
-            ));
-        }
-    }
-    rows.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.3.cmp(&b.3))
-            .then_with(|| a.5.group.cmp(&b.5.group))
-            .then_with(|| a.5.offset1.cmp(&b.5.offset1))
-            .then_with(|| a.6.copy.cmp(&b.6.copy))
-    });
-    for (chrom, pos1, ref_base, alt_base, event, candidate, obs) in rows {
-        let info = format!(
-            "EVENT={};EVENTTYPE=MRJD_SNV;MRJD_GROUP={};MRJD_COPY={};MRJD_OFFSET={};MRJD_REGIONS_WITH_ALT={};MRJD_REGION_COUNT={};MRJD_ALT_POSITIVE_DEPTH={};MRJD_ALT_POSITIVE_ALT_COUNT={};MRJD_COPY_DEPTH={};MRJD_COPY_ALT_COUNT={};MRJD_COPY_ALT_FRACTION={:.6}",
-            event,
-            vcf_escape(&candidate.group),
-            vcf_escape(&obs.copy),
-            candidate.offset1,
-            candidate.regions_with_alt,
-            candidate.region_count,
-            candidate.alt_positive_depth,
-            candidate.alt_positive_alt_count,
-            obs.depth,
-            obs.alt_count,
-            obs.alt_fraction
-        );
-        writeln!(
-            out,
-            "{}\t{}\t.\t{}\t{}\t.\tPASS\t{}",
-            vcf_escape(&chrom),
-            pos1,
-            ref_base,
-            alt_base,
-            info
-        )
-        .map_err(|e| format!("failed to write VCF: {e}"))?;
-    }
-    out.flush()
-        .map_err(|e| format!("failed to write VCF: {e}"))?;
-    Ok(())
 }
 
 fn run() -> Result<(), String> {
@@ -373,26 +238,34 @@ fn run() -> Result<(), String> {
     validate_output_paths(&cfg)?;
     let regions = read_regions_tsv(&cfg.regions)?;
     let fai = Fai::from_path(&cfg.reference)?;
-    let candidates = detect_snv_candidates(
+    let mapq255_policy = if cfg.keep_mapq_255 {
+        Mapq255Policy::KeepWhenFiltering
+    } else {
+        Mapq255Policy::DropWhenFiltering
+    };
+    let candidates = detect_snv_candidates_with_mapq255_policy(
         &cfg.bam,
         &cfg.reference,
         &fai,
         &regions,
         cfg.candidate,
+        mapq255_policy,
         cfg.threads,
     )?;
     if let Some(path) = cfg.vcf.as_deref() {
-        write_vcf_sidecar(path, &regions, &candidates)?;
+        let file = File::create(Path::new(path))
+            .map_err(|e| format!("cannot create VCF sidecar '{path}': {e}"))?;
+        write_diagnostic_vcf(BufWriter::new(file), &regions, &candidates)?;
     }
     match cfg.output.as_deref() {
         None | Some("-") => {
             let stdout = io::stdout();
-            write_candidates(BufWriter::new(stdout.lock()), &candidates)?;
+            write_candidates_tsv(BufWriter::new(stdout.lock()), &candidates)?;
         }
         Some(path) => {
             let file = File::create(Path::new(path))
                 .map_err(|e| format!("cannot create output '{path}': {e}"))?;
-            write_candidates(BufWriter::new(file), &candidates)?;
+            write_candidates_tsv(BufWriter::new(file), &candidates)?;
         }
     }
     Ok(())

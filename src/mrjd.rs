@@ -7,9 +7,9 @@
 
 use crate::io::fasta::Fai;
 use rust_htslib::bam::{self, Read};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Region {
@@ -46,6 +46,24 @@ impl Default for CandidateConfig {
             min_alt_count: 2,
             min_alt_fraction: 0.20,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mapq255Policy {
+    DropWhenFiltering,
+    KeepWhenFiltering,
+}
+
+impl Default for Mapq255Policy {
+    fn default() -> Self {
+        Self::DropWhenFiltering
+    }
+}
+
+impl Mapq255Policy {
+    fn keep_when_filtering(self) -> bool {
+        matches!(self, Self::KeepWhenFiltering)
     }
 }
 
@@ -174,13 +192,23 @@ fn region_count_for_offset(regions: &[Region], group: &str, offset1: i64) -> usi
         .count()
 }
 
-fn usable_record(record: &bam::Record, min_mapq: u8) -> bool {
-    !record.is_unmapped()
-        && !record.is_quality_check_failed()
-        && !record.is_duplicate()
-        && !record.is_secondary()
-        && !record.is_supplementary()
-        && (min_mapq == 0 || (record.mapq() != 255 && record.mapq() >= min_mapq))
+fn usable_record(record: &bam::Record, min_mapq: u8, keep_mapq_255: bool) -> bool {
+    if record.is_unmapped()
+        || record.is_quality_check_failed()
+        || record.is_duplicate()
+        || record.is_secondary()
+        || record.is_supplementary()
+    {
+        return false;
+    }
+    if min_mapq == 0 {
+        return true;
+    }
+    let mapq = record.mapq();
+    if mapq == 255 {
+        return keep_mapq_255;
+    }
+    mapq >= min_mapq
 }
 
 pub fn detect_snv_candidates(
@@ -189,6 +217,26 @@ pub fn detect_snv_candidates(
     fai: &Fai,
     regions: &[Region],
     cfg: CandidateConfig,
+    threads: usize,
+) -> Result<Vec<JointCandidate>, String> {
+    detect_snv_candidates_with_mapq255_policy(
+        bam_path,
+        reference_path,
+        fai,
+        regions,
+        cfg,
+        Mapq255Policy::default(),
+        threads,
+    )
+}
+
+pub fn detect_snv_candidates_with_mapq255_policy(
+    bam_path: &str,
+    reference_path: &str,
+    fai: &Fai,
+    regions: &[Region],
+    cfg: CandidateConfig,
+    mapq255_policy: Mapq255Policy,
     threads: usize,
 ) -> Result<Vec<JointCandidate>, String> {
     validate_candidate_config(cfg)?;
@@ -243,7 +291,7 @@ pub fn detect_snv_candidates(
             let mut counts = [0u32; 4];
             for alignment in pileup.alignments() {
                 let record = alignment.record();
-                if !usable_record(&record, cfg.min_mapq) {
+                if !usable_record(&record, cfg.min_mapq, mapq255_policy.keep_when_filtering()) {
                     continue;
                 }
                 let Some(qpos) = alignment.qpos() else {
@@ -305,6 +353,160 @@ pub fn detect_snv_candidates(
     Ok(out)
 }
 
+fn format_observations(candidate: &JointCandidate) -> String {
+    candidate
+        .observations
+        .iter()
+        .map(|obs| {
+            format!(
+                "{}|{}:{}|{}|{}|{}|{:.6}",
+                obs.copy,
+                obs.chrom,
+                obs.pos1,
+                obs.ref_base as char,
+                obs.depth,
+                obs.alt_count,
+                obs.alt_fraction
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+pub fn write_candidates_tsv<W: Write>(
+    mut out: W,
+    candidates: &[JointCandidate],
+) -> Result<(), String> {
+    writeln!(
+        out,
+        "group\toffset1\talt\talt_positive_depth\talt_positive_alt_count\tregions_with_alt\tregion_count\tper_region"
+    )
+    .map_err(|e| format!("failed to write output: {e}"))?;
+    for candidate in candidates {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            candidate.group,
+            candidate.offset1,
+            candidate.alt_base as char,
+            candidate.alt_positive_depth,
+            candidate.alt_positive_alt_count,
+            candidate.regions_with_alt,
+            candidate.region_count,
+            format_observations(candidate)
+        )
+        .map_err(|e| format!("failed to write output: {e}"))?;
+    }
+    Ok(())
+}
+
+fn vcf_escape(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b':' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn diagnostic_event_id(candidate: &JointCandidate) -> String {
+    format!(
+        "MRJD:{}:{}:{}",
+        vcf_escape(&candidate.group),
+        candidate.offset1,
+        candidate.alt_base as char
+    )
+}
+
+pub fn write_diagnostic_vcf<W: Write>(
+    mut out: W,
+    regions: &[Region],
+    candidates: &[JointCandidate],
+) -> Result<(), String> {
+    writeln!(out, "##fileformat=VCFv4.3").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##source=phase_tools-rs_multi_region_joint_detect")
+        .map_err(|e| format!("failed to write VCF: {e}"))?;
+    let contigs = regions
+        .iter()
+        .map(|region| region.chrom.as_str())
+        .collect::<BTreeSet<_>>();
+    for contig in contigs {
+        writeln!(out, "##contig=<ID={}>", vcf_escape(contig))
+            .map_err(|e| format!("failed to write VCF: {e}"))?;
+    }
+    writeln!(out, "##INFO=<ID=EVENT,Number=1,Type=String,Description=\"Multi-region joint-detection event identifier shared by homologous observations\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=EVENTTYPE,Number=1,Type=String,Description=\"Event class; currently MRJD_SNV for diagnostic SNV evidence\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_GROUP,Number=1,Type=String,Description=\"Region group from the multi-region manifest\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_COPY,Number=1,Type=String,Description=\"Copy/region label from the multi-region manifest\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_OFFSET,Number=1,Type=Integer,Description=\"1-based offset within the grouped region\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_REGIONS_WITH_ALT,Number=1,Type=Integer,Description=\"Number of regions in this group with alt-positive evidence for the event\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_REGION_COUNT,Number=1,Type=Integer,Description=\"Number of manifest regions in this group covering the event offset\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_ALT_POSITIVE_DEPTH,Number=1,Type=Integer,Description=\"Summed depth across alt-positive region observations only\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_ALT_POSITIVE_ALT_COUNT,Number=1,Type=Integer,Description=\"Summed alt count across alt-positive region observations only\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_COPY_DEPTH,Number=1,Type=Integer,Description=\"Depth for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_COPY_ALT_COUNT,Number=1,Type=Integer,Description=\"Alt count for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "##INFO=<ID=MRJD_COPY_ALT_FRACTION,Number=1,Type=Float,Description=\"Alt fraction for this specific region observation\">").map_err(|e| format!("failed to write VCF: {e}"))?;
+    writeln!(out, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
+        .map_err(|e| format!("failed to write VCF: {e}"))?;
+
+    let mut rows = Vec::new();
+    for candidate in candidates {
+        let event = diagnostic_event_id(candidate);
+        for obs in &candidate.observations {
+            rows.push((
+                obs.chrom.clone(),
+                obs.pos1,
+                obs.ref_base as char,
+                candidate.alt_base as char,
+                event.clone(),
+                candidate,
+                obs,
+            ));
+        }
+    }
+    rows.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.3.cmp(&b.3))
+            .then_with(|| a.5.group.cmp(&b.5.group))
+            .then_with(|| a.5.offset1.cmp(&b.5.offset1))
+            .then_with(|| a.6.copy.cmp(&b.6.copy))
+    });
+    for (chrom, pos1, ref_base, alt_base, event, candidate, obs) in rows {
+        let info = format!(
+            "EVENT={};EVENTTYPE=MRJD_SNV;MRJD_GROUP={};MRJD_COPY={};MRJD_OFFSET={};MRJD_REGIONS_WITH_ALT={};MRJD_REGION_COUNT={};MRJD_ALT_POSITIVE_DEPTH={};MRJD_ALT_POSITIVE_ALT_COUNT={};MRJD_COPY_DEPTH={};MRJD_COPY_ALT_COUNT={};MRJD_COPY_ALT_FRACTION={:.6}",
+            event,
+            vcf_escape(&candidate.group),
+            vcf_escape(&obs.copy),
+            candidate.offset1,
+            candidate.regions_with_alt,
+            candidate.region_count,
+            candidate.alt_positive_depth,
+            candidate.alt_positive_alt_count,
+            obs.depth,
+            obs.alt_count,
+            obs.alt_fraction
+        );
+        writeln!(
+            out,
+            "{}\t{}\t.\t{}\t{}\t.\tPASS\t{}",
+            vcf_escape(&chrom),
+            pos1,
+            ref_base,
+            alt_base,
+            info
+        )
+        .map_err(|e| format!("failed to write VCF: {e}"))?;
+    }
+    out.flush()
+        .map_err(|e| format!("failed to write VCF: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +540,73 @@ mod tests {
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].group, "group");
         assert_eq!(regions[0].chrom, "chr1");
+    }
+
+    #[test]
+    fn vcf_escape_percent_encodes_reserved_characters() {
+        assert_eq!(vcf_escape("G 1;%=x"), "G%201%3B%25%3Dx");
+    }
+
+    #[test]
+    fn writes_candidate_tsv_from_library() {
+        let candidates = vec![JointCandidate {
+            group: "G1".to_string(),
+            offset1: 6,
+            alt_base: b'C',
+            alt_positive_depth: 5,
+            alt_positive_alt_count: 3,
+            regions_with_alt: 1,
+            region_count: 2,
+            observations: vec![RegionObservation {
+                copy: "copy1".to_string(),
+                chrom: "chr1".to_string(),
+                pos1: 15,
+                ref_base: b'A',
+                depth: 5,
+                alt_count: 3,
+                alt_fraction: 0.6,
+            }],
+        }];
+        let mut out = Vec::new();
+        write_candidates_tsv(&mut out, &candidates).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("group\toffset1\talt\talt_positive_depth"));
+        assert!(text.contains("G1\t6\tC\t5\t3\t1\t2\tcopy1|chr1:15|A|5|3|0.600000"));
+    }
+
+    #[test]
+    fn writes_diagnostic_vcf_from_library() {
+        let regions = vec![Region {
+            group: "G 1".to_string(),
+            chrom: "chr1".to_string(),
+            start1: 10,
+            end1: 20,
+            copy: "copy;1".to_string(),
+        }];
+        let candidates = vec![JointCandidate {
+            group: "G 1".to_string(),
+            offset1: 6,
+            alt_base: b'C',
+            alt_positive_depth: 5,
+            alt_positive_alt_count: 3,
+            regions_with_alt: 1,
+            region_count: 1,
+            observations: vec![RegionObservation {
+                copy: "copy;1".to_string(),
+                chrom: "chr1".to_string(),
+                pos1: 15,
+                ref_base: b'A',
+                depth: 5,
+                alt_count: 3,
+                alt_fraction: 0.6,
+            }],
+        }];
+        let mut out = Vec::new();
+        write_diagnostic_vcf(&mut out, &regions, &candidates).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("##INFO=<ID=EVENT,"));
+        assert!(text.contains("EVENT=MRJD:G%201:6:C"));
+        assert!(text.contains("MRJD_COPY=copy%3B1"));
+        assert!(text.contains("chr1\t15\t.\tA\tC\t.\tPASS"));
     }
 }

@@ -36,6 +36,9 @@ of path-including assembly code. `phase_mnv_rs`, `phase_adjudicate`,
 wrapper instead of each owning a separate htslib `faidx` wrapper.
 `phase_mnv_rs` uses `phase_tools::io::vcf` for output format inference,
 self-index policy resolution, and htslib-backed VCF/BCF index creation.
+`multi_region_joint_detect` now delegates candidate scanning plus TSV and
+plain diagnostic VCF formatting to `phase_tools::mrjd`; the binary is primarily
+argument parsing, path validation, and file/stdout wiring.
 
 ## Refactor rules
 

@@ -92,6 +92,16 @@ if "$bin" \
 fi
 grep -q -- '--output and --vcf must be different paths' "$tmp/same_path.err"
 
+if "$bin" \
+  --reference "$tmp/ref.fa" \
+  --regions "$tmp/regions.tsv" \
+  --vcf "$tmp/misleading.vcf.gz" \
+  "$tmp/reads.bam" > "$tmp/misleading.stdout" 2> "$tmp/misleading.err"; then
+  echo "misleading compressed VCF sidecar suffix unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q -- '--vcf currently writes plain diagnostic VCF' "$tmp/misleading.err"
+
 cat > "$tmp/regions.escape.tsv" <<'TSV'
 group	chrom	start	end	copy
 G 1	chr1	10	20	copy;1
@@ -117,6 +127,15 @@ group	offset1	alt	alt_positive_depth	alt_positive_alt_count	regions_with_alt	reg
 G1	6	C	6	4	1	2	copy1|chr1:15|A|6|4|0.666667
 TSV
 diff -u "$tmp/mapq255.expected.tsv" "$tmp/mapq255.tsv"
+
+"$bin" \
+  --reference "$tmp/ref.fa" \
+  --regions "$tmp/regions.tsv" \
+  --min-mapq 20 \
+  --keep-mapq-255 \
+  --min-alt-count 4 \
+  "$tmp/reads.bam" > "$tmp/mapq255_keep.tsv"
+diff -u "$tmp/mapq255.expected.tsv" "$tmp/mapq255_keep.tsv"
 
 cat > "$tmp/regions.headerless.tsv" <<'TSV'
 group	chr1	10	20	copy1

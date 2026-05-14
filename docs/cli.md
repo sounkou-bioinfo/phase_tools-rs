@@ -332,7 +332,8 @@ Depth/count totals are over alt-positive region observations; ref-only or
 uncovered copies are counted in region_count but omitted from per_region. The
 VCF sidecar emits one record per alt-positive region observation. String INFO
 values are percent-escaped. Duplicate, QC-fail, secondary, and supplementary
-records are excluded. MAPQ 255 is excluded only when --min-mapq is greater than 0.
+records are excluded. MAPQ 255 is retained when no MAPQ threshold is requested
+and otherwise dropped as unknown unless --keep-mapq-255 is set.
 
 regions.tsv columns:
 group<TAB>chrom<TAB>start<TAB>end[<TAB>copy]
@@ -344,6 +345,7 @@ options:
 --min-baseq N          Minimum base quality (default: 13)
 --min-alt-count N      Minimum per-region alt count (default: 2)
 --min-alt-fraction F   Minimum per-region alt fraction (default: 0.20)
+--keep-mapq-255        Keep MAPQ 255 reads even when --min-mapq > 0
 -@, --threads N            BAM/CRAM reader threads (default: 1)
 -o, --output FILE          Output TSV path (default: stdout)
 --vcf FILE             Write diagnostic VCF sidecar with EVENT/EVENTTYPE
