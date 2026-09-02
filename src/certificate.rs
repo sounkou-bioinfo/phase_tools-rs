@@ -129,7 +129,11 @@ impl DecisionCertificate {
                     line_index + 1
                 ));
             };
-            if key.is_empty() || value.chars().any(|character| matches!(character, '\n' | '\r')) {
+            if key.is_empty()
+                || value
+                    .chars()
+                    .any(|character| matches!(character, '\n' | '\r'))
+            {
                 return Err(format!("invalid certificate line {}", line_index + 1));
             }
             if fields.insert(key.to_string(), value.to_string()).is_some() {
