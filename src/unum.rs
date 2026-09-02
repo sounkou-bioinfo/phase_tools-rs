@@ -236,18 +236,68 @@ fn count_genotype_calls(path: &Path) -> Result<u64, UnumError> {
             path.display()
         ))
     })?;
+    count_genotype_calls_text(&text)
+}
 
-    Ok(text
-        .lines()
-        .filter(|raw_line| {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return false;
+/// Count active primary allele slots with genotype quality greater than zero.
+///
+/// Unum/T1K genotype rows are:
+/// `gene, num_alleles, allele_1, abundance_1, quality_1, allele_2, ...`.
+/// This deliberately does not count a gene row or a placeholder as a call.
+fn count_genotype_calls_text(text: &str) -> Result<u64, UnumError> {
+    let mut call_count = 0u64;
+
+    for (line_index, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields
+            .first()
+            .is_some_and(|value| value.eq_ignore_ascii_case("gene"))
+        {
+            continue;
+        }
+        if fields.len() < 2 {
+            return Err(UnumError::new(format!(
+                "malformed Unum genotype row {}: expected at least two tab-separated columns",
+                line_index + 1
+            )));
+        }
+        let num_alleles = fields[1].parse::<usize>().map_err(|_| {
+            UnumError::new(format!(
+                "malformed Unum genotype row {}: invalid num_alleles '{}'",
+                line_index + 1,
+                fields[1]
+            ))
+        })?;
+
+        for slot in 0..num_alleles.min(2) {
+            let allele_index = 2 + 3 * slot;
+            let quality_index = allele_index + 2;
+            let Some(allele) = fields.get(allele_index) else {
+                break;
+            };
+            let Some(quality_text) = fields.get(quality_index) else {
+                break;
+            };
+            let quality = quality_text.parse::<f64>().map_err(|_| {
+                UnumError::new(format!(
+                    "malformed Unum genotype row {}: invalid quality '{}'",
+                    line_index + 1,
+                    quality_text
+                ))
+            })?;
+            if *allele != "." && quality.is_finite() && quality > 0.0 {
+                call_count = call_count
+                    .checked_add(1)
+                    .ok_or_else(|| UnumError::new("normalized Unum call cardinality overflow"))?;
             }
-            let first = line.split_whitespace().next().unwrap_or_default();
-            !first.eq_ignore_ascii_case("gene")
-        })
-        .count() as u64)
+        }
+    }
+
+    Ok(call_count)
 }
 
 fn suffixed_path(prefix: &Path, suffix: &str) -> PathBuf {
@@ -299,5 +349,15 @@ mod tests {
             suffixed_path(Path::new("sample.name"), "_genotype.tsv"),
             PathBuf::from("sample.name_genotype.tsv")
         );
+    }
+
+    #[test]
+    fn normalized_cardinality_counts_only_positive_quality_slots() {
+        let text = concat!(
+            "HLA-A\t2\tHLA-A*01:01\t9.0\t30\tHLA-A*02:01\t8.0\t20\t.\n",
+            "HLA-B\t1\t.\t0\t-1\t.\t0\t-1\t.\n",
+            "HLA-C\t1\tHLA-C*01:02\t7.0\t0\t.\t0\t-1\t.\n",
+        );
+        assert_eq!(count_genotype_calls_text(text), Ok(2));
     }
 }

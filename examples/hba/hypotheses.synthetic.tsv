@@ -1,0 +1,14 @@
+# Synthetic demonstration only; expectations are not calibrated clinical resources.
+hypothesis	call	hba1_cn	hba2_cn	prior_penalty	feature	expected	tolerance	weight
+normal	alpha-alpha/alpha-alpha	2	2	0	hba_total_depth_milli	4000	100	10
+normal	alpha-alpha/alpha-alpha	2	2	0	hba1_unique_depth_milli	2000	100	10
+normal	alpha-alpha/alpha-alpha	2	2	0	hba2_unique_depth_milli	2000	100	10
+normal	alpha-alpha/alpha-alpha	2	2	0	deletion_junction_score_milli	0	100	20
+single_alpha_deletion	-alpha/alpha-alpha	1	2	0	hba_total_depth_milli	3000	100	10
+single_alpha_deletion	-alpha/alpha-alpha	1	2	0	hba1_unique_depth_milli	1000	100	10
+single_alpha_deletion	-alpha/alpha-alpha	1	2	0	hba2_unique_depth_milli	2000	100	10
+single_alpha_deletion	-alpha/alpha-alpha	1	2	0	deletion_junction_score_milli	1000	100	20
+cis_double_deletion	--/alpha-alpha	1	1	0	hba_total_depth_milli	2000	100	10
+cis_double_deletion	--/alpha-alpha	1	1	0	hba1_unique_depth_milli	1000	100	10
+cis_double_deletion	--/alpha-alpha	1	1	0	hba2_unique_depth_milli	1000	100	10
+cis_double_deletion	--/alpha-alpha	1	1	0	deletion_junction_score_milli	1000	100	20

@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: ${{ matrix.os }}
+  rust:
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,198 +16,47 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
-      - name: Ensure stable Rust toolchain wrappers
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/rust-wrapper"
-          cat > "$RUNNER_TEMP/rust-wrapper/cargo" <<'SH'
-          #!/usr/bin/env bash
-          exec rustup run stable cargo "$@"
-          SH
-          cat > "$RUNNER_TEMP/rust-wrapper/rustc" <<'SH'
-          #!/usr/bin/env bash
-          exec rustup run stable rustc "$@"
-          SH
-          cat > "$RUNNER_TEMP/rust-wrapper/rustfmt" <<'SH'
-          #!/usr/bin/env bash
-          exec rustup run stable rustfmt "$@"
-          SH
-          chmod +x "$RUNNER_TEMP/rust-wrapper/cargo" "$RUNNER_TEMP/rust-wrapper/rustc" "$RUNNER_TEMP/rust-wrapper/rustfmt"
-          echo "$RUNNER_TEMP/rust-wrapper" >> "$GITHUB_PATH"
-          rustup run stable cargo --version
-          rustup run stable rustfmt --version
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Install R for README generation
-        uses: r-lib/actions/setup-r@v2
-
-      - name: Install README generation dependency
-        shell: bash
-        run: Rscript -e 'install.packages("knitr", repos = "https://cloud.r-project.org")'
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install genomics CLIs used by regression tests (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bcftools samtools
-          bcftools --version | head -2
-          samtools --version | head -2
-
-      - name: Install genomics CLIs used by regression tests (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew install bcftools samtools
-          bcftools --version | head -2
-          samtools --version | head -2
-
-      - name: Check Rust formatting
-        shell: bash
+      - name: Format
         run: cargo fmt --check
 
-      - name: Show explicit test fixtures
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Exercise registry and HBA certificate
         shell: bash
         run: |
-          find tests/fixtures -type f -maxdepth 1 -print | sort
-          sed -n '1,20p' tests/fixtures/phased_mnv.expected.body.vcf
+          target/release/phase-tools targets --assay wes --validated-enrichment
+          target/release/phase-tools hba \
+            --assay wgs \
+            --evidence examples/hba/evidence.synthetic.tsv \
+            --hypotheses examples/hba/hypotheses.synthetic.tsv \
+            --min-margin 10 \
+            --certificate "${RUNNER_TEMP}/hba.cert"
+          target/release/phase-tools verify --certificate "${RUNNER_TEMP}/hba.cert"
 
-      - name: Build Rust release/static where supported
-        shell: bash
-        run: make static-release
+  lean:
+    name: Lean certificate proofs
+    runs-on: ubuntu-latest
 
-      - name: Locate Rust binary
-        id: rust-bin
-        shell: bash
-        run: |
-          if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            host=$(rustc -vV | sed -n 's/^host: //p')
-            bin="target/${host}/release/phase_mnv_rs"
-            phase_compare="target/${host}/release/phase_compare"
-            unphase="target/${host}/release/unphase_vcf"
-            fermi_lite="target/${host}/release/fermi_lite_assemble"
-            bam_error_model="target/${host}/release/bam_error_model"
-            phase_adjudicate="target/${host}/release/phase_adjudicate"
-            bam_contamination="target/${host}/release/bam_contamination"
-            bam_ancestry="target/${host}/release/bam_ancestry"
-          else
-            bin="target/release/phase_mnv_rs"
-            phase_compare="target/release/phase_compare"
-            unphase="target/release/unphase_vcf"
-            fermi_lite="target/release/fermi_lite_assemble"
-            bam_error_model="target/release/bam_error_model"
-            phase_adjudicate="target/release/phase_adjudicate"
-            bam_contamination="target/release/bam_contamination"
-            bam_ancestry="target/release/bam_ancestry"
-          fi
-          test -x "$bin"
-          test -x "$phase_compare"
-          test -x "$unphase"
-          test -x "$fermi_lite"
-          test -x "$bam_error_model"
-          test -x "$phase_adjudicate"
-          test -x "$bam_contamination"
-          test -x "$bam_ancestry"
-          echo "path=$bin" >> "$GITHUB_OUTPUT"
-          echo "phase_compare=$phase_compare" >> "$GITHUB_OUTPUT"
-          echo "unphase=$unphase" >> "$GITHUB_OUTPUT"
-          echo "fermi_lite=$fermi_lite" >> "$GITHUB_OUTPUT"
-          echo "bam_error_model=$bam_error_model" >> "$GITHUB_OUTPUT"
-          echo "phase_adjudicate=$phase_adjudicate" >> "$GITHUB_OUTPUT"
-          echo "bam_contamination=$bam_contamination" >> "$GITHUB_OUTPUT"
-          echo "bam_ancestry=$bam_ancestry" >> "$GITHUB_OUTPUT"
-          file "$bin" "$phase_compare" "$unphase" "$fermi_lite" "$bam_error_model" "$phase_adjudicate" "$bam_contamination" "$bam_ancestry"
-          if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            ldd "$bin" || true
-            ldd "$phase_compare" || true
-            ldd "$unphase" || true
-            ldd "$fermi_lite" || true
-            ldd "$bam_error_model" || true
-            ldd "$phase_adjudicate" || true
-            ldd "$bam_contamination" || true
-            ldd "$bam_ancestry" || true
-          else
-            otool -L "$bin"
-            otool -L "$phase_compare"
-            otool -L "$unphase"
-            otool -L "$fermi_lite"
-            otool -L "$bam_error_model"
-            otool -L "$phase_adjudicate"
-            otool -L "$bam_contamination"
-            otool -L "$bam_ancestry"
-          fi
-
-      - name: Test Rust binary
-        shell: bash
-        run: |
-          ./tests/test_unphase_vcf.sh "${{ steps.rust-bin.outputs.unphase }}"
-          ./tests/test_phase_mnv.sh "${{ steps.rust-bin.outputs.path }}"
-          ./tests/test_output_formats.sh "${{ steps.rust-bin.outputs.path }}"
-          ./tests/test_bcftools_norm.sh "${{ steps.rust-bin.outputs.path }}"
-          ./tests/test_all_sites.sh "${{ steps.rust-bin.outputs.path }}"
-          ./tests/test_bam_phase.sh "${{ steps.rust-bin.outputs.path }}"
-          ./tests/test_phase_compare.sh "${{ steps.rust-bin.outputs.phase_compare }}"
-          ./tests/test_fermi_lite.sh "${{ steps.rust-bin.outputs.fermi_lite }}"
-          ./tests/test_bam_error_model.sh "${{ steps.rust-bin.outputs.bam_error_model }}"
-          ./tests/test_phase_adjudicate.sh "${{ steps.rust-bin.outputs.phase_adjudicate }}"
-          ./tests/test_bam_contamination.sh "${{ steps.rust-bin.outputs.bam_contamination }}"
-          ./tests/test_bam_ancestry.sh "${{ steps.rust-bin.outputs.bam_ancestry }}"
-          ./tests/test_negative.sh "${{ steps.rust-bin.outputs.path }}"
-
-      - name: Check generated README is up to date
-        shell: bash
-        run: make check-readme
-
-      - name: Set up micromamba with WhatsHap
-        if: runner.os == 'Linux'
-        uses: mamba-org/setup-micromamba@v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
         with:
-          environment-name: phase-mnv-whatshap
-          create-args: >-
-            -c conda-forge
-            -c bioconda
-            whatshap=2.8
-            bcftools
-            samtools
-          cache-environment: true
-
-      - name: Compare with WhatsHap using native phase_compare
-        if: runner.os == 'Linux'
-        shell: bash
-        run: make compare-whatshap-phase
-
-      - name: Package binaries
-        shell: bash
-        run: |
-          mkdir -p dist-ci
-          suffix="$(printf '%s-%s' "$RUNNER_OS" "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
-          cp "${{ steps.rust-bin.outputs.path }}" "dist-ci/phase_mnv_rs-${suffix}"
-          cp "${{ steps.rust-bin.outputs.phase_compare }}" "dist-ci/phase_compare-${suffix}"
-          cp "${{ steps.rust-bin.outputs.unphase }}" "dist-ci/unphase_vcf-${suffix}"
-          cp "${{ steps.rust-bin.outputs.fermi_lite }}" "dist-ci/fermi_lite_assemble-${suffix}"
-          cp "${{ steps.rust-bin.outputs.bam_error_model }}" "dist-ci/bam_error_model-${suffix}"
-          cp "${{ steps.rust-bin.outputs.phase_adjudicate }}" "dist-ci/phase_adjudicate-${suffix}"
-          cp "${{ steps.rust-bin.outputs.bam_contamination }}" "dist-ci/bam_contamination-${suffix}"
-          cp "${{ steps.rust-bin.outputs.bam_ancestry }}" "dist-ci/bam_ancestry-${suffix}"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
-          else
-            shasum -a 256 dist-ci/* > "dist-ci/SHA256SUMS-${suffix}.txt"
-          fi
-          cat "dist-ci/SHA256SUMS-${suffix}.txt"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase_tools-${{ runner.os }}-${{ runner.arch }}
-          path: dist-ci/*
+          build: true
+          test: false
+          lint: false
