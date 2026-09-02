@@ -10,7 +10,7 @@ use std::path::Path;
 
 pub const CERTIFICATE_SCHEMA: &str = "phase-tools-certificate-v1";
 pub const REGISTRY_VERSION: &str = "dragen-4.5-plus-hla-kir-v1";
-pub const PROOF_CONTRACT: &str = "PhaseTools.Certificate.V1";
+pub const PROOF_CONTRACT: &str = "PhaseTools.Certificate.V2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionWitness {
@@ -293,24 +293,21 @@ impl DecisionCertificate {
                 if self.call_count != 0 {
                     errors.push("no-call certificate must have call_count = 0".to_string());
                 }
-                let observability = require_observable(self.target, self.assay);
-                match reason {
-                    NoCallReason::AssayNotObservable
-                        if observability != Err(NoCallReason::AssayNotObservable) =>
+
+                match require_observable(self.target, self.assay) {
+                    Err(expected) if reason != expected => errors.push(format!(
+                        "no-call reason '{reason}' contradicts assay failure '{expected}'"
+                    )),
+                    Err(_) => {}
+                    Ok(())
+                        if !evidence_no_call_allowed(target_spec.implementation, reason) =>
                     {
-                        errors.push(
-                            "assay-not-observable reason contradicts the registry".to_string(),
-                        );
+                        errors.push(format!(
+                            "no-call reason '{reason}' is not allowed for implementation state '{}'",
+                            target_spec.implementation
+                        ));
                     }
-                    NoCallReason::MissingValidatedEnrichment
-                        if observability != Err(NoCallReason::MissingValidatedEnrichment) =>
-                    {
-                        errors.push(
-                            "missing-validated-enrichment reason contradicts the registry"
-                                .to_string(),
-                        );
-                    }
-                    _ => {}
+                    Ok(()) => {}
                 }
             }
         }
@@ -339,6 +336,20 @@ impl DecisionCertificate {
         } else {
             Err(errors)
         }
+    }
+}
+
+fn evidence_no_call_allowed(
+    implementation: ImplementationStatus,
+    reason: NoCallReason,
+) -> bool {
+    match implementation {
+        ImplementationStatus::Runnable => reason == NoCallReason::InsufficientEvidence,
+        ImplementationStatus::SolverKernel => matches!(
+            reason,
+            NoCallReason::InsufficientEvidence | NoCallReason::AmbiguousTopScore
+        ),
+        ImplementationStatus::ContractOnly => false,
     }
 }
 
@@ -406,6 +417,27 @@ mod tests {
 
     fn digest(label: &[u8]) -> String {
         to_hex(&sha256_bytes(label))
+    }
+
+    fn certificate(
+        target: Target,
+        assay: AssayProfile,
+        backend: &str,
+        status: CallStatus,
+        call_count: u64,
+    ) -> DecisionCertificate {
+        DecisionCertificate {
+            target,
+            assay,
+            backend: backend.to_string(),
+            backend_version: "test".to_string(),
+            status,
+            call_count,
+            input_sha256: digest(b"input"),
+            resource_sha256: digest(b"resource"),
+            output_sha256: digest(b"output"),
+            selection: None,
+        }
     }
 
     #[test]
@@ -482,5 +514,64 @@ mod tests {
             }),
         };
         assert!(certificate.verify().is_err());
+    }
+
+    #[test]
+    fn assay_failure_requires_the_exact_registry_reason() {
+        let mut certificate = certificate(
+            Target::Cyp2d6,
+            AssayProfile::wes(false),
+            "native-planned",
+            CallStatus::NoCall(NoCallReason::InsufficientEvidence),
+            0,
+        );
+        assert!(certificate.verify().is_err());
+
+        certificate.status = CallStatus::NoCall(NoCallReason::AssayNotObservable);
+        assert_eq!(certificate.verify(), Ok(()));
+    }
+
+    #[test]
+    fn contract_only_target_cannot_issue_an_evidence_no_call() {
+        let certificate = certificate(
+            Target::Cyp2d6,
+            AssayProfile::wgs(),
+            "native-planned",
+            CallStatus::NoCall(NoCallReason::InsufficientEvidence),
+            0,
+        );
+        assert!(certificate.verify().is_err());
+    }
+
+    #[test]
+    fn runnable_unum_lane_allows_only_insufficient_evidence_no_call() {
+        let mut certificate = certificate(
+            Target::Hla,
+            AssayProfile::wgs(),
+            "unum",
+            CallStatus::NoCall(NoCallReason::AmbiguousTopScore),
+            0,
+        );
+        assert!(certificate.verify().is_err());
+
+        certificate.status = CallStatus::NoCall(NoCallReason::InsufficientEvidence);
+        assert_eq!(certificate.verify(), Ok(()));
+    }
+
+    #[test]
+    fn hba_solver_allows_ambiguous_and_insufficient_no_calls() {
+        for reason in [
+            NoCallReason::AmbiguousTopScore,
+            NoCallReason::InsufficientEvidence,
+        ] {
+            let certificate = certificate(
+                Target::Hba,
+                AssayProfile::wgs(),
+                "native-hba-v1",
+                CallStatus::NoCall(reason),
+                0,
+            );
+            assert_eq!(certificate.verify(), Ok(()));
+        }
     }
 }
