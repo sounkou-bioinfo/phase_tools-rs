@@ -111,7 +111,8 @@ theorem verified_called_is_implemented (witness : CallWitness)
   have statusValid := (verifyCall_sound witness verified).2.2
   unfold callStatusValid at statusValid
   rw [status] at statusValid
-  exact (Bool.and_eq_true.mp statusValid).1
+  simp only [Bool.and_eq_true] at statusValid
+  exact statusValid.1
 
 theorem verified_called_is_observable (witness : CallWitness)
     (status : witness.status = .called)
@@ -120,10 +121,9 @@ theorem verified_called_is_observable (witness : CallWitness)
   have statusValid := (verifyCall_sound witness verified).2.2
   unfold callStatusValid at statusValid
   rw [status] at statusValid
-  have calledParts := Bool.and_eq_true.mp statusValid
-  have evidenceParts := Bool.and_eq_true.mp calledParts.2
+  simp only [Bool.and_eq_true] at statusValid
   exact (noAssayFailure_iff_observable
-    witness.target witness.assay witness.validatedEnrichment).mp evidenceParts.1
+    witness.target witness.assay witness.validatedEnrichment).mp statusValid.2.1
 
 theorem verified_called_has_positive_calls (witness : CallWitness)
     (status : witness.status = .called)
@@ -132,9 +132,8 @@ theorem verified_called_has_positive_calls (witness : CallWitness)
   have statusValid := (verifyCall_sound witness verified).2.2
   unfold callStatusValid at statusValid
   rw [status] at statusValid
-  have calledParts := Bool.and_eq_true.mp statusValid
-  have evidenceParts := Bool.and_eq_true.mp calledParts.2
-  exact of_decide_eq_true evidenceParts.2
+  simp only [Bool.and_eq_true] at statusValid
+  exact of_decide_eq_true statusValid.2.2
 
 theorem verified_noCall_has_zero_calls (witness : CallWitness)
     (reason : NoCallReason)
@@ -144,7 +143,8 @@ theorem verified_noCall_has_zero_calls (witness : CallWitness)
   have statusValid := (verifyCall_sound witness verified).2.2
   unfold callStatusValid at statusValid
   rw [status] at statusValid
-  exact of_decide_eq_true (Bool.and_eq_true.mp statusValid).1
+  simp only [Bool.and_eq_true] at statusValid
+  exact of_decide_eq_true statusValid.1
 
 theorem verified_noCall_reason_valid (witness : CallWitness)
     (reason : NoCallReason)
@@ -156,7 +156,8 @@ theorem verified_noCall_reason_valid (witness : CallWitness)
   have statusValid := (verifyCall_sound witness verified).2.2
   unfold callStatusValid at statusValid
   rw [status] at statusValid
-  exact (Bool.and_eq_true.mp statusValid).2
+  simp only [Bool.and_eq_true] at statusValid
+  exact statusValid.2
 
 theorem verified_noCall_exact_assay_reason (witness : CallWitness)
     (reason expected : NoCallReason)
