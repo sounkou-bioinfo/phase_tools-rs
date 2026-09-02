@@ -15,6 +15,11 @@ def callInvariant (witness : CallWitness) : Prop :=
   | .called => 0 < witness.callCount
   | .noCall => witness.callCount = 0
 
+instance callInvariantDecidable (witness : CallWitness) :
+    Decidable (callInvariant witness) := by
+  unfold callInvariant
+  cases witness.status <;> infer_instance
+
 def verifyCall (witness : CallWitness) : Bool :=
   decide (callInvariant witness)
 
@@ -37,6 +42,11 @@ def selectionInvariant (witness : SelectionWitness) : Prop :=
   0 < witness.candidateCount ∧
     witness.winnerIndex < witness.candidateCount ∧
     witness.winnerPenalty + witness.requiredMargin ≤ witness.runnerUpPenalty
+
+instance selectionInvariantDecidable (witness : SelectionWitness) :
+    Decidable (selectionInvariant witness) := by
+  unfold selectionInvariant
+  infer_instance
 
 def verifySelection (witness : SelectionWitness) : Bool :=
   decide (selectionInvariant witness)
