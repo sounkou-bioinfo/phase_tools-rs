@@ -91,9 +91,7 @@ pub fn validate_request(request: &UnumRequest) -> Result<(), UnumError> {
         return Err(UnumError::new("threads must be >= 1"));
     }
     if request.bam_mode == UnumBamMode::Alignment && request.ref_coord_fasta.is_none() {
-        return Err(UnumError::new(
-            "Unum alignment mode requires --ref-coord",
-        ));
+        return Err(UnumError::new("Unum alignment mode requires --ref-coord"));
     }
     if request.output_prefix.as_os_str().is_empty() {
         return Err(UnumError::new("output prefix must not be empty"));

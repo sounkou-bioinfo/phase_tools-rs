@@ -43,29 +43,24 @@ impl DecisionCertificate {
             CallStatus::Called => ("called", ".".to_string()),
             CallStatus::NoCall(reason) => ("no-call", reason.to_string()),
         };
-        let (
-            candidate_count,
-            winner_index,
-            winner_penalty,
-            runner_up_penalty,
-            required_margin,
-        ) = if let Some(selection) = self.selection {
-            (
-                selection.candidate_count.to_string(),
-                selection.winner_index.to_string(),
-                selection.winner_penalty.to_string(),
-                selection.runner_up_penalty.to_string(),
-                selection.required_margin.to_string(),
-            )
-        } else {
-            (
-                ".".to_string(),
-                ".".to_string(),
-                ".".to_string(),
-                ".".to_string(),
-                ".".to_string(),
-            )
-        };
+        let (candidate_count, winner_index, winner_penalty, runner_up_penalty, required_margin) =
+            if let Some(selection) = self.selection {
+                (
+                    selection.candidate_count.to_string(),
+                    selection.winner_index.to_string(),
+                    selection.winner_penalty.to_string(),
+                    selection.runner_up_penalty.to_string(),
+                    selection.required_margin.to_string(),
+                )
+            } else {
+                (
+                    ".".to_string(),
+                    ".".to_string(),
+                    ".".to_string(),
+                    ".".to_string(),
+                    ".".to_string(),
+                )
+            };
 
         format!(
             concat!(
@@ -286,9 +281,8 @@ impl DecisionCertificate {
                     errors.push("called certificate must have call_count > 0".to_string());
                 }
                 if target_spec.implementation == ImplementationStatus::ContractOnly {
-                    errors.push(
-                        "contract-only target cannot issue a called certificate".to_string(),
-                    );
+                    errors
+                        .push("contract-only target cannot issue a called certificate".to_string());
                 }
                 if let Err(reason) = require_observable(self.target, self.assay) {
                     errors.push(format!(
@@ -358,9 +352,8 @@ fn verify_selection(witness: SelectionWitness, errors: &mut Vec<String>) {
     }
     match witness.winner_penalty.checked_add(witness.required_margin) {
         Some(bound) if bound <= witness.runner_up_penalty => {}
-        Some(_) => errors.push(
-            "selection margin witness does not separate winner from runner-up".to_string(),
-        ),
+        Some(_) => errors
+            .push("selection margin witness does not separate winner from runner-up".to_string()),
         None => errors.push("selection margin witness overflows u64".to_string()),
     }
 }

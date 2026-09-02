@@ -3,7 +3,7 @@ use phase_tools::certificate::{
 };
 use phase_tools::digest::{sha256_bytes, sha256_file, to_hex};
 use phase_tools::hba::{
-    read_evidence, read_hypotheses, select_hba, HbaDecision, HbaOutcome, HbaHypothesis,
+    read_evidence, read_hypotheses, select_hba, HbaDecision, HbaHypothesis, HbaOutcome,
 };
 use phase_tools::model::{AssayKind, AssayProfile, CallStatus, NoCallReason, Target};
 use phase_tools::registry::{require_observable, spec, TARGET_SPECS};
@@ -57,9 +57,7 @@ fn command_targets(arguments: &[String]) -> Result<(), String> {
         .map(|value| parse_assay_profile(value, options.flag("--validated-enrichment")))
         .transpose()?;
 
-    println!(
-        "target\tfamily\tbackend\timplementation\twgs\twes\tevidence\tselected_profile"
-    );
+    println!("target\tfamily\tbackend\timplementation\twgs\twes\tevidence\tselected_profile");
     for entry in TARGET_SPECS {
         let evidence = entry
             .evidence
@@ -116,23 +114,22 @@ fn command_hba(arguments: &[String]) -> Result<(), String> {
     let input_sha256 = hash_file(&evidence_path, "HBA evidence")?;
     let resource_sha256 = hash_file(&hypotheses_path, "HBA hypothesis resource")?;
 
-    let (output, status, call_count, selection) =
-        match require_observable(Target::Hba, assay) {
-            Err(reason) => (
-                format_hba_no_call(reason, None, None, &[]),
-                CallStatus::NoCall(reason),
-                0,
-                None,
-            ),
-            Ok(()) => {
-                let evidence = read_evidence(&evidence_path).map_err(|error| error.to_string())?;
-                let hypotheses =
-                    read_hypotheses(&hypotheses_path).map_err(|error| error.to_string())?;
-                let decision = select_hba(&evidence, &hypotheses, required_margin)
-                    .map_err(|error| error.to_string())?;
-                certificate_parts_for_hba(&decision, &hypotheses, required_margin)?
-            }
-        };
+    let (output, status, call_count, selection) = match require_observable(Target::Hba, assay) {
+        Err(reason) => (
+            format_hba_no_call(reason, None, None, &[]),
+            CallStatus::NoCall(reason),
+            0,
+            None,
+        ),
+        Ok(()) => {
+            let evidence = read_evidence(&evidence_path).map_err(|error| error.to_string())?;
+            let hypotheses =
+                read_hypotheses(&hypotheses_path).map_err(|error| error.to_string())?;
+            let decision = select_hba(&evidence, &hypotheses, required_margin)
+                .map_err(|error| error.to_string())?;
+            certificate_parts_for_hba(&decision, &hypotheses, required_margin)?
+        }
+    };
 
     print!("{output}");
     let output_sha256 = to_hex(&sha256_bytes(output.as_bytes()));
@@ -195,12 +192,7 @@ fn certificate_parts_for_hba(
             runner_up_penalty,
             missing_features,
         } => Ok((
-            format_hba_no_call(
-                *reason,
-                *top_penalty,
-                *runner_up_penalty,
-                missing_features,
-            ),
+            format_hba_no_call(*reason, *top_penalty, *runner_up_penalty, missing_features),
             CallStatus::NoCall(*reason),
             0,
             None,
@@ -215,8 +207,7 @@ fn format_hba_no_call(
     missing_features: &[String],
 ) -> String {
     let top = top_penalty.map_or_else(|| ".".to_string(), |value| value.to_string());
-    let runner =
-        runner_up_penalty.map_or_else(|| ".".to_string(), |value| value.to_string());
+    let runner = runner_up_penalty.map_or_else(|| ".".to_string(), |value| value.to_string());
     let detail = if missing_features.is_empty() {
         reason.to_string()
     } else {
@@ -427,7 +418,11 @@ impl Options {
             if value.starts_with("--") {
                 return Err(format!("option '{option}' requires a value"));
             }
-            if output.values.insert(option.clone(), value.clone()).is_some() {
+            if output
+                .values
+                .insert(option.clone(), value.clone())
+                .is_some()
+            {
                 return Err(format!("duplicate option '{option}'"));
             }
             index += 2;

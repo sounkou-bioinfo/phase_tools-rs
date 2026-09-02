@@ -88,9 +88,7 @@ pub fn parse_evidence(text: &str) -> Result<HbaEvidence, HbaError> {
                 "evidence line {line_number} must contain feature and value"
             )));
         }
-        if fields[0].eq_ignore_ascii_case("feature")
-            && fields[1].eq_ignore_ascii_case("value")
-        {
+        if fields[0].eq_ignore_ascii_case("feature") && fields[1].eq_ignore_ascii_case("value") {
             continue;
         }
 
@@ -140,8 +138,7 @@ pub fn parse_hypotheses(text: &str) -> Result<Vec<HbaHypothesis>, HbaError> {
                 "hypothesis line {line_number} must contain 9 tab-separated columns"
             )));
         }
-        if fields[0].eq_ignore_ascii_case("hypothesis")
-            && fields[5].eq_ignore_ascii_case("feature")
+        if fields[0].eq_ignore_ascii_case("hypothesis") && fields[5].eq_ignore_ascii_case("feature")
         {
             continue;
         }
@@ -330,10 +327,7 @@ pub fn select_hba(
     })
 }
 
-fn score_hypothesis(
-    evidence: &HbaEvidence,
-    hypothesis: &HbaHypothesis,
-) -> Result<u64, HbaError> {
+fn score_hypothesis(evidence: &HbaEvidence, hypothesis: &HbaHypothesis) -> Result<u64, HbaError> {
     let mut penalty = hypothesis.prior_penalty;
 
     for expectation in &hypothesis.expectations {
@@ -361,7 +355,10 @@ fn score_hypothesis(
             ))
         })?;
         penalty = penalty.checked_add(contribution).ok_or_else(|| {
-            HbaError::new(format!("penalty overflow for hypothesis '{}'", hypothesis.id))
+            HbaError::new(format!(
+                "penalty overflow for hypothesis '{}'",
+                hypothesis.id
+            ))
         })?;
     }
 
@@ -432,10 +429,8 @@ single_deletion\t-alpha/alpha-alpha\t1\t2\t0\thba1_unique_depth_milli\t1000\t100
 
     #[test]
     fn ties_are_no_calls() {
-        let evidence = parse_evidence(
-            "hba_total_depth_milli\t3500\nhba1_unique_depth_milli\t1500\n",
-        )
-        .unwrap();
+        let evidence =
+            parse_evidence("hba_total_depth_milli\t3500\nhba1_unique_depth_milli\t1500\n").unwrap();
         let hypotheses = parse_hypotheses(HYPOTHESES).unwrap();
         let decision = select_hba(&evidence, &hypotheses, 1).unwrap();
 

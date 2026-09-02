@@ -152,9 +152,7 @@ pub fn require_observable(target: Target, assay: AssayProfile) -> Result<(), NoC
     match spec(target).wes {
         WesSupport::StandardCapture => Ok(()),
         WesSupport::ValidatedTargetEnrichment if assay.validated_target_enrichment => Ok(()),
-        WesSupport::ValidatedTargetEnrichment => {
-            Err(NoCallReason::MissingValidatedEnrichment)
-        }
+        WesSupport::ValidatedTargetEnrichment => Err(NoCallReason::MissingValidatedEnrichment),
         WesSupport::Unsupported => Err(NoCallReason::AssayNotObservable),
     }
 }
