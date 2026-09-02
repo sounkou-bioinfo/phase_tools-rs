@@ -1,0 +1,6 @@
+# Synthetic demonstration only; not a clinical HBA evidence profile.
+feature	value
+hba_total_depth_milli	4000
+hba1_unique_depth_milli	2000
+hba2_unique_depth_milli	2000
+deletion_junction_score_milli	0

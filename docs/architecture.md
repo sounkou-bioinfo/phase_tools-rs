@@ -1,70 +1,71 @@
-# phase_tools-rs architecture
+# Architecture
 
-`phase_tools-rs` is being organized as a library-first Rust genomics package.
-The binaries remain important user-facing entry points, but new algorithms and
-shared I/O should live in the `phase_tools` library crate before being exposed
-through CLI wrappers.
-
-## Target shape
+The repository has one public binary, `phase-tools`, and one closed target
+registry. The design rejects the former “one more utility” growth pattern.
 
 ```text
-src/lib.rs
-src/assembly/          local assembly and assembly-backed adjudication
-src/io/                FASTA/VCF/BAM/CRAM/TSV helpers
-src/variant/           alleles, genotypes, phase tags, normalization helpers
-src/phase/             read-backed phasing, read selection, MEC/greedy kernels
-src/mnv/               MNV/COMPLEX construction and output helpers
-src/qc/                BAM/CRAM error, contamination, and ancestry kernels
-src/mrjd.rs            initial multi-region joint-detection kernels
-src/commands/          CLI adapters around library functions
-src/bin/               minimal binary entry points
+BAM/CRAM + assay declaration + versioned target resources
+                         |
+                 target-specific evidence
+                         |
+       +-----------------+------------------+
+       |                                    |
+Unum allele-typing lane           native target lane
+(HLA, KIR)                        (HBA, then DRAGEN set)
+       |                                    |
+       +--------------- normalized call ----+
+                         |
+        call / typed no-call + content hashes
+                         |
+              decision certificate verifier
+                         |
+                    Lean contract
 ```
 
-The first library boundaries are now in place for fermi-lite assembly, FASTA
-reference access, and VCF/BCF output-index policy:
+## Public modules
 
-```text
-phase_tools::assembly::fermi_lite
-phase_tools::io::fasta
-phase_tools::io::vcf
-phase_tools::mrjd
-```
+- `model`: closed target, assay, backend, evidence, and no-call types.
+- `registry`: exhaustive target contracts and observability checks.
+- `unum`: shell-free HLA/KIR backend adapter.
+- `hba`: resource-driven integer hypothesis solver.
+- `digest`: dependency-free SHA-256 and named-resource hashing.
+- `certificate`: canonical certificate format and verifier.
 
-`fermi_lite_assemble` and `phase_adjudicate` call the assembly module instead
-of path-including assembly code. `phase_mnv_rs`, `phase_adjudicate`,
-`bam_error_model`, `bam_contamination`, and `bam_ancestry` share the FASTA/FAI
-wrapper instead of each owning a separate htslib `faidx` wrapper.
-`phase_mnv_rs` uses `phase_tools::io::vcf` for output format inference,
-self-index policy resolution, and htslib-backed VCF/BCF index creation.
-`multi_region_joint_detect` now delegates candidate scanning plus TSV and
-plain diagnostic VCF formatting to `phase_tools::mrjd`; the binary is primarily
-argument parsing, path validation, and file/stdout wiring.
+Phasing, local assembly, pileup extraction, and read realignment are
+implementation details. They become public only if an external contract
+requires them; otherwise they remain target-lane kernels.
 
-## Refactor rules
+## Target implementation rule
 
-1. Keep behavior-preserving extraction separate from feature changes.
-2. Move duplicated primitives into the library before adding new binary options.
-3. Keep `rust-htslib` as the only htslib access path in Rust code.
-4. Preserve CLI output formats and test fixtures while moving internals.
-5. Expose narrow, typed kernels first; keep CLI parsing and printing at the
-   command boundary.
-6. Avoid adding dependencies unless they materially improve a reusable library
-   module.
+A target progresses through three explicit states:
 
-## Immediate extraction sequence
+1. `contract-only`: its assay/evidence/output contract exists, but it cannot
+   issue a called certificate.
+2. `solver-kernel`: the deterministic inference kernel exists for prepared
+   evidence.
+3. `runnable`: extraction, inference, output normalization, certificates, and
+   validation fixtures are wired end to end.
 
-1. Shared error/result helpers.
-2. Continue moving VCF/BCF output, genotype, `PS`, and `HP` helpers into
-   `phase_tools::io::vcf` / `phase_tools::variant`.
-3. BAM record filtering and base/event extraction.
-4. `phase_compare` comparison kernel.
-5. BAM phasing read collection, read selection, MEC, and greedy kernels.
-6. MNV/COMPLEX observation collection, construction, and writing.
-7. BAM/CRAM QC kernels for error, contamination, and ancestry tools.
+Changing a status requires tests and a registry/proof review. There is no
+generic “experimental caller” state that silently produces plausible output.
 
-## Current caveats
+## Evidence before algorithms
 
-The main `phase_mnv_rs` implementation still contains most phasing and MNV logic
-in `src/main.rs`. That is intentional during the transition: extraction should
-be incremental and validated after each step rather than a large rewrite that
-changes behavior and architecture at the same time.
+Each target defines the evidence it can legitimately consume. Shared
+algorithms are extracted only after two target implementations demonstrate the
+same semantics. This avoids prematurely forcing HLA allele abundance, HBA copy
+number, LPA repeats, and RH hybrids through one generic caller abstraction.
+
+## Output contract
+
+Every attempted target returns either:
+
+- a call with nonzero call cardinality; or
+- a typed no-call.
+
+A software crash, malformed resource, or unreadable input is an error, not a
+biological no-call. Assay-not-observable and missing-enrichment results are
+no-calls because they are properties of the declared experiment.
+
+Every emitted certificate binds the input, resource set, and normalized output
+with SHA-256.

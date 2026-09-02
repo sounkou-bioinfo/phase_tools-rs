@@ -1,29 +1,26 @@
 [package]
 name = "phase_tools-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.85"
 license = "MIT"
-description = "Rust library and CLI toolkit for phased variants, read evidence, BAM error modeling, and contamination probes"
+description = "Proof-carrying short-read callers for difficult genomic loci"
 repository = "https://github.com/sounkou-bioinfo/phase_tools-rs"
 homepage = "https://github.com/sounkou-bioinfo/phase_tools-rs"
 documentation = "https://github.com/sounkou-bioinfo/phase_tools-rs#readme"
 readme = "README.md"
+build = false
+autobins = false
 
 [lib]
 name = "phase_tools"
 path = "src/lib.rs"
 
 [[bin]]
-name = "phase_mnv_rs"
-path = "src/main.rs"
+name = "phase-tools"
+path = "src/bin/phase_tools.rs"
 
 [dependencies]
-rust-htslib = { version = "0.46.0", default-features = false, features = ["static"] }
-libc = "0.2"
-
-[build-dependencies]
-bindgen = "0.69"
-cc = "1.0"
 
 [profile.release]
 lto = "thin"

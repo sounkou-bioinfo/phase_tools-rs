@@ -1,183 +1,148 @@
 # phase_tools-rs
 
-`phase_tools-rs` is a Rust library and CLI toolkit for phased VCF/BCF
-handling, read-backed phase evidence, BAM/CRAM empirical error summaries, and
-anchor-based contamination probes. The flagship binary, `phase_mnv_rs`, builds
-normalized phased haplotype MNV/COMPLEX records from variants on the same
-haplotype and phase set.
+`phase_tools-rs` is being reduced to one job:
 
-The package exposes an internal `phase_tools` library crate. New functionality
-should land as reusable library modules first, with binaries acting as thin CLI
-frontends. The code uses `rust-htslib` for VCF/BCF/BAM/CRAM I/O. Rust-only
-phasing, adjudication, error-model, contamination, and fermi-lite assembly
-helpers are experimental unless a document explicitly says otherwise.
+> **Call medically relevant difficult loci from short-read WGS/WES, emit an
+> explicit no-call when the assay cannot support the claim, and attach a
+> machine-checkable decision certificate.**
 
-## CLI frontends
+The old public collection of MNV, phasing, contamination, ancestry, BAM error
+model, and assembly commands is removed from the build. Useful phasing and
+assembly code may return later only as private evidence kernels for a target
+caller.
 
-| Binary | Purpose |
-| --- | --- |
-| `phase_mnv_rs` | Build normalized phased `TYPE=MNV` / `TYPE=COMPLEX` records. |
-| `phase_compare` | Native phase-concordance and switch-error summary for two VCF/BCF files. |
-| `unphase_vcf` | Convert phased VCF/BCF GT separators to unphased and optionally drop phase tags. |
-| `bam_error_model` | Summarize empirical mismatch/insertion/deletion patterns from BAM/CRAM vs FASTA. |
-| `phase_adjudicate` | Initial read-evidence adjudication for `phase_compare --pair-tsv` SNV pairs, with optional assembly sidecars/fallback. |
-| `bam_contamination` | Experimental anchor-site contamination probe from BAM/CRAM plus TSV/VCF/BCF anchors. |
-| `bam_ancestry` | Experimental Summix-style ancestry mixture probe from BAM/CRAM plus population-AF anchors. |
-| `fermi_lite_assemble` | fermi-lite FFI local assembly utility for assembly-backed adjudication workflows. |
-| `multi_region_joint_detect` | Initial multi-region SNV candidate evidence scanner with TSV and diagnostic VCF outputs for grouped homologous regions. |
+## Closed target scope
 
-Full generated CLI help lives in [`docs/cli.md`](docs/cli.md).
+The registry is finite. It contains HLA and KIR through the
+[Unum](https://github.com/fg-labs/unum) Rust port of T1K, plus every target in
+the Illumina DRAGEN v4.5 Targeted Caller set.
 
-`multi_region_joint_detect --vcf` writes a diagnostic plain VCF sidecar with one
-record per alt-positive region observation. `EVENT`/`EVENTTYPE` link homologous
-observations for the same grouped offset; string INFO values are percent-escaped
-for VCF safety. MAPQ 255 reads are retained when no MAPQ threshold is requested
-and otherwise treated as unknown mapping quality unless `--keep-mapq-255` is set.
+| Target | WGS | WES | Backend in this refocus | State |
+|---|---:|---:|---|---|
+| HLA | yes | capture-dependent | Unum/T1K lane | runnable |
+| KIR | yes | capture-dependent | Unum/T1K lane | runnable |
+| CYP2B6 | yes | no | native paralog lane | contract only |
+| CYP2D6 | yes | no | native paralog lane | contract only |
+| CYP21A2 | yes | no | native paralog lane | contract only |
+| GBA | yes | no | native paralog lane | contract only |
+| HBA | yes | validated enrichment only | native integer solver | solver kernel |
+| LPA | yes | no | native repeat-CN lane | contract only |
+| RH | yes | no | native blood-group/paralog lane | contract only |
+| SMN | yes | validated enrichment only | native paralog lane | contract only |
 
-## Quick start
+“Closed” means that target-dependent code must exhaust this enum and the Lean
+proof checks the same finite set. It does **not** mean that unfinished callers
+are represented as finished. A `contract-only` target cannot issue a valid
+`called` certificate.
 
-```bash
-. "$HOME/.cargo/env"
-make release
+The WES entries are observability contracts, not marketing labels. HBA and SMN
+require a declared, validated target-enrichment profile. Every target still has
+read/depth/evidence quality gates after this assay-level check.
 
-target/release/phase_mnv_rs \
-  --reference ref.fa \
-  --sample S1 \
-  --output mnv.vcf \
-  input.vcf.gz
-```
+## Two algorithmic lanes
 
-Useful build targets:
+### 1. HLA/KIR allele typing
 
-```bash
-make test                  # tracked-fixture test suite
-make install               # install CLIs to ~/.local/bin
-make static-release        # static Linux release when supported
-make compare-whatshap-phase # optional Linux WhatsHap comparison
-```
+`phase-tools unum` executes the maintained Unum backend without a shell. Unum
+owns candidate-read extraction, allele k-mers, banded alignment, abundance
+estimation, and allele inference. This repository owns:
 
-Output format is inferred from `-o/--output`: `.vcf`, `.vcf.gz`, `.vcf.bgz`, or
-`.bcf`; stdout is plain VCF. Use `.vcf.gz`, `.vcf.bgz`, or `.bcf` when you need
-indexed output. Plain `.vcf` output and stdout redirection are not indexable; do
-not write `phase_mnv_rs ... > out.vcf.gz` and expect a BGZF-indexable file. Use
-`-o out.vcf.gz` instead. Indexable `-o` outputs self-index by default with CSI
-after the output file is closed. Use `--write-index=tbi` for a tabix/TBI sidecar
-on BGZF VCF, or `--no-write-index` to disable self-indexing. Use `--threads N` /
-`-@ N` for htslib/BGZF worker threads.
+- the HLA/KIR-only backend boundary;
+- WGS/WES observability declarations;
+- input, resource, and result hashes;
+- normalized call cardinality;
+- the proof-carrying certificate.
 
-The default `--emit mnv` output contains only constructed MNV/COMPLEX records.
-Use `--emit combined` when you want constructed records plus selected-sample
-input variants that are not represented by any emitted merge. `--emit all-sites`
-remains the mode for preserving every input record, with optional BAM-backed
-phase tag updates.
+This avoids copying the T1K port into a second codebase. Direct `unum-core`
+embedding should wait for a stable end-to-end library API; the current
+high-level driver lives in the Unum binary crate.
 
-## Minimal MNV example
+### 2. Copy-number/paralog/repeat targets
 
-```bash
-target/release/phase_mnv_rs -r tests/fixtures/ref.fa --no-header -q tests/fixtures/phased_mnv.vcf
-```
+The native lane consumes typed evidence rather than pretending all loci share
+one pileup caller. Its evidence vocabulary includes unique and total depth,
+paralog-differentiating sites, junction reads, small variants, repeat-spanning
+reads, and phase links.
+
+The first executable kernel is HBA hypothesis selection. It takes a versioned,
+resource-defined hypothesis catalogue and integer-valued evidence. Candidate
+penalties are computed as:
 
 ```text
-chr1	1	.	AC	GT	.	PASS	TYPE=MNV;NVAR=2;NSNPS=2;END=2;SOURCE_POS=1,2;HAPS=2;PS=10	GT:PS	0|1:10
-chr1	4	.	TA	CG	.	PASS	TYPE=MNV;NVAR=2;NSNPS=2;END=5;SOURCE_POS=4,5;HAPS=1;PS=10	GT:PS	1|0:10
-chr1	6	.	CG	AT	.	PASS	TYPE=MNV;NVAR=2;NSNPS=2;END=7;SOURCE_POS=6,7;HAPS=1,2;PS=20	GT:PS	1|1:20
+prior_penalty
+  + sum(ceil(abs(observed - expected) / tolerance) * weight)
 ```
 
-## BAM-backed examples and helpers
+The unique minimum must beat the runner-up by the requested margin. Otherwise
+the result is an explicit no-call. Integer arithmetic makes the exact decision
+portable and suitable for certificate verification. Feature extraction,
+normalization, population hypothesis resources, and analytical validation are
+still separate work; the synthetic example is not a clinical HBA resource.
 
-`--phase-from-bam` performs experimental Rust read-backed phasing before MNV
-construction. The default `--phase-algorithm mec` solves an exact diploid
-single-sample MEC objective per connected component after WhatsHap-style padded
-REF/ALT realignment, QNAME read-pair grouping, interval coverage capping,
-bridge-read rescue, and blank-aware active read state across unobserved
-intermediate variants. `--phase-max-coverage 15` is the default internal
-downsampling guard (aliases:
-`--phase-internal-downsampling`, `--internal-downsampling`). Compatible phasing
-flags include `--tag PS|HP`, `--only-snvs`, `--output-read-list`,
-`--mapping-quality`/`--mapq`, `--ignore-read-groups`, and
-`--use-supplementary`; use WhatsHap itself when established WhatsHap behavior is
-required.
-
-`bam_error_model` estimates error-plus-variation unless you restrict to trusted
-homozygous-reference sites or use its optional site guard:
+## Build and test
 
 ```bash
-target/release/bam_error_model \
-  --reference tests/fixtures/ref.fa \
-  --position-tsv read_pos.tsv \
-  --event-tsv events.tsv \
-  tests/fixtures/read_phase.bam
+make test
+make proof
+make release
 ```
 
-`bam_contamination` accepts headered TSV anchors (`chrom,pos,ref,alt,gt[,ref_af]`)
-or VCF/VCF.GZ/VCF.BGZ/BCF anchors with sample `GT`. VCF `INFO/REF_AF` is used
-as reference allele frequency when present; otherwise `INFO/AF` is treated as
-ALT frequency and converted to `ref_af = 1 - AF`. Anchor REF bases are validated
-against the supplied FASTA. No MAPQ/baseQ filter is applied by default; optional
-thresholds must be explicit.
+Lean is pinned in `lean-toolchain`; Rust has no runtime crate dependencies in
+this refocus slice.
 
-`bam_ancestry` is an experimental Summix-style helper. It counts REF/ALT bases at
-ancestry-informative anchors, estimates observed ALT fractions, and fits a
-non-negative mixture over reference population ALT frequencies:
+## Inspect the target contract
 
 ```bash
-target/release/bam_ancestry \
-  --reference ref.fa \
-  --bam reads.bam \
-  --anchors ancestry_anchors.tsv \
-  --populations AFR,EUR,EAS,SAS,AMR
+cargo run -- targets
+cargo run -- targets --assay wes
+cargo run -- targets --assay wes --validated-enrichment
 ```
 
-For targeted HLA/HLA-DRB1 exon 2 assays, treat contamination estimates as anchor
-probes rather than definitive sample-wide estimates unless the assay includes
-independent contamination markers outside the highly polymorphic HLA interval.
-See [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md).
-
-## Citations
-
-If you use this software, cite `phase_tools-rs` via [`CITATION.cff`](CITATION.cff)
-and cite the upstream methods relevant to your workflow:
-
-- Normalization / parsimonious REF/ALT representation: Tan, Abecasis & Kang
-  2015, *Bioinformatics*, doi:[10.1093/bioinformatics/btv112](https://doi.org/10.1093/bioinformatics/btv112).
-- External WhatsHap phasing workflows: Martin et al. 2016, *bioRxiv*,
-  doi:[10.1101/085050](https://doi.org/10.1101/085050).
-- MEC / weighted haplotype assembly ideas behind the experimental Rust BAM
-  phaser: Patterson et al. 2015, *Journal of Computational Biology*,
-  doi:[10.1089/cmb.2014.0157](https://doi.org/10.1089/cmb.2014.0157).
-- fermi-lite / FermiKit-backed local assembly workflows: Li 2015,
-  *Bioinformatics*, doi:[10.1093/bioinformatics/btv440](https://doi.org/10.1093/bioinformatics/btv440).
-- CHARR-like contamination concepts: Lu et al. 2023, *American Journal of Human
-  Genetics*, doi:[10.1016/j.ajhg.2023.10.011](https://doi.org/10.1016/j.ajhg.2023.10.011).
-- Summix-style summary allele-frequency ancestry deconvolution concepts:
-  Arriaga-MacKenzie et al. 2021, *American Journal of Human Genetics*,
-  doi:[10.1016/j.ajhg.2021.05.016](https://doi.org/10.1016/j.ajhg.2021.05.016).
-
-The Rust BAM phaser and contamination helper are inspired by these methods but
-are not drop-in replacements for WhatsHap, CHARR, VerifyBamID, or Summix.
-
-## Development
-
-`README.md` and `docs/cli.md` are generated from R Markdown sources:
+## Run the synthetic HBA solver example
 
 ```bash
-make readme
+cargo run -- hba \
+  --assay wgs \
+  --evidence examples/hba/evidence.synthetic.tsv \
+  --hypotheses examples/hba/hypotheses.synthetic.tsv \
+  --min-margin 10 \
+  --certificate /tmp/hba.cert
+
+cargo run -- verify --certificate /tmp/hba.cert
 ```
 
-Default tests and CI use only tracked fixtures under `tests/fixtures/`; pass
-private/larger paths from your shell rather than committing them.
+## Run HLA/KIR through Unum
 
-## License
+```bash
+cargo run -- unum \
+  --target HLA \
+  --assay wgs \
+  --unum /path/to/unum \
+  --bam sample.bam \
+  --ref-seq hla.ref.fa \
+  --ref-coord hla.coord.fa \
+  --bam-mode alignment \
+  --output-prefix results/sample.hla \
+  --threads 8 \
+  --certificate results/sample.hla.cert
+```
 
-MIT. The fermi-lite source under `vendor/fermi-lite` carries its upstream
-license and is used as an optional local assembly substrate.
+KIR uses the same command with a KIR reference. Resource construction and
+versioning remain Unum responsibilities.
 
-## Documentation
+## What a Lean certificate proves
 
-- [`docs/cli.md`](docs/cli.md) — generated full CLI help.
-- [`docs/semantics.md`](docs/semantics.md) — variant, phasing, and helper semantics.
-- [`docs/validation.md`](docs/validation.md) — tracked validation strategy.
-- [`docs/architecture.md`](docs/architecture.md) — library-first package architecture and refactor plan.
-- [`docs/roadmap.md`](docs/roadmap.md) — staged WhatsHap, local-assembly, and BAM-calling roadmap.
-- [`docs/contamination_and_ancestry.md`](docs/contamination_and_ancestry.md) — contamination/HLA/ancestry notes.
-- [`docs/nirvana_benchmark.md`](docs/nirvana_benchmark.md) — Nirvana-style codon benchmark notes.
+The Lean project proves the finite target closure, the DRAGEN-v4.5 targeted
+subset, the HBA/SMN WES-enrichment rule, call/no-call cardinality, and soundness
+of the HBA winner/margin witness. Rust verifies the corresponding certificate
+fields before writing them.
+
+A certificate proves that a result follows the declared deterministic contract
+for content-addressed inputs and resources. It cannot prove that the reads came
+from the stated patient, that the assay was unbiased, that a resource catalogue
+is biologically complete, or that the caller is clinically accurate. Those
+claims require sample provenance, truth data, calibration, and validation.
+
+See [the architecture](docs/architecture.md),
+[the closed scope](docs/scope.md), and
+[the formal assurance boundary](docs/certificates.md).
