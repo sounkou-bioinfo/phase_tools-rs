@@ -1,9 +1,14 @@
-//! Library core for `phase_tools-rs`.
+#![forbid(unsafe_code)]
+//! Difficult-locus target callers with explicit assay observability and
+//! machine-checkable decision certificates.
 //!
-//! The command-line binaries in this package are thin frontends over this
-//! library. The public module layout is being stabilized incrementally; prefer
-//! adding reusable genomics kernels here before exposing new binary-only logic.
+//! The public surface is intentionally finite. Phasing, local assembly, and
+//! read-evidence algorithms may exist as internal kernels, but this crate does
+//! not expose a grab bag of unrelated BAM/VCF utilities.
 
-pub mod assembly;
-pub mod io;
-pub mod mrjd;
+pub mod certificate;
+pub mod digest;
+pub mod hba;
+pub mod model;
+pub mod registry;
+pub mod unum;
