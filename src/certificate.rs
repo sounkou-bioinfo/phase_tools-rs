@@ -299,9 +299,7 @@ impl DecisionCertificate {
                         "no-call reason '{reason}' contradicts assay failure '{expected}'"
                     )),
                     Err(_) => {}
-                    Ok(())
-                        if !evidence_no_call_allowed(target_spec.implementation, reason) =>
-                    {
+                    Ok(()) if !evidence_no_call_allowed(target_spec.implementation, reason) => {
                         errors.push(format!(
                             "no-call reason '{reason}' is not allowed for implementation state '{}'",
                             target_spec.implementation
@@ -339,10 +337,7 @@ impl DecisionCertificate {
     }
 }
 
-fn evidence_no_call_allowed(
-    implementation: ImplementationStatus,
-    reason: NoCallReason,
-) -> bool {
+fn evidence_no_call_allowed(implementation: ImplementationStatus, reason: NoCallReason) -> bool {
     match implementation {
         ImplementationStatus::Runnable => reason == NoCallReason::InsufficientEvidence,
         ImplementationStatus::SolverKernel => matches!(
