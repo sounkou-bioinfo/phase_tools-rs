@@ -59,7 +59,11 @@ jobs:
         with:
           auto-config: false
           build: true
+          build-args: "--wfail"
           test: false
           lint: false
+          leanchecker: true
+          axiom-audit: true
+          axiom-audit-root: PhaseTools
           use-github-cache: false
           use-mathlib-cache: false
