@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 
 pub const CERTIFICATE_SCHEMA: &str = "phase-tools-certificate-v1";
 pub const REGISTRY_VERSION: &str = "dragen-4.5-plus-hla-kir-v1";
@@ -130,11 +129,7 @@ impl DecisionCertificate {
                     line_index + 1
                 ));
             };
-            if key.is_empty()
-                || value
-                    .chars()
-                    .any(|character| matches!(character, '\n' | '\r'))
-            {
+            if key.is_empty() || value.chars().any(|character| matches!(character, '\n' | '\r')) {
                 return Err(format!("invalid certificate line {}", line_index + 1));
             }
             if fields.insert(key.to_string(), value.to_string()).is_some() {
@@ -204,7 +199,7 @@ impl DecisionCertificate {
             required(&fields, "required_margin")?,
         ];
         let all_missing = selection_values.iter().all(|value| *value == ".");
-        let any_missing = selection_values.iter().any(|value| *value == ".");
+        let any_missing = selection_values.contains(&".");
         let selection = if all_missing {
             None
         } else if any_missing {
