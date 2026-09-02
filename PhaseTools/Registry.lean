@@ -57,7 +57,7 @@ def observable (target : Target) (assay : Assay) (validatedEnrichment : Bool) : 
 theorem mem_allTargets (target : Target) : target ∈ allTargets := by
   cases target <;> simp [allTargets]
 
-theorem dragen45_closed (target : Target) (h : target ∈ dragen45Targets) :
+theorem dragen45_closed (target : Target) (_membership : target ∈ dragen45Targets) :
     target ∈ allTargets := by
   exact mem_allTargets target
 
