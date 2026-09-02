@@ -23,10 +23,10 @@ structure CallWitness where
   callCount : Nat
 deriving Repr
 
-def assayDeclarationValid (witness : CallWitness) : Prop :=
+def assayDeclarationValid (witness : CallWitness) : Bool :=
   match witness.assay with
-  | .wgs => witness.validatedEnrichment = false
-  | .wes => True
+  | .wgs => !witness.validatedEnrichment
+  | .wes => true
 
 def assayFailure
     (target : Target)
@@ -43,6 +43,14 @@ def assayFailure
           | false => some .missingValidatedEnrichment
       | .unsupported => some .assayNotObservable
 
+def noAssayFailure
+    (target : Target)
+    (assay : Assay)
+    (validatedEnrichment : Bool) : Bool :=
+  match assayFailure target assay validatedEnrichment with
+  | none => true
+  | some _ => false
+
 def evidenceNoCallAllowed (target : Target) (reason : NoCallReason) : Bool :=
   match implementationFor target, reason with
   | .runnable, .insufficientEvidence => true
@@ -50,47 +58,46 @@ def evidenceNoCallAllowed (target : Target) (reason : NoCallReason) : Bool :=
   | .solverKernel, .ambiguousTopScore => true
   | _, _ => false
 
-def callInvariant (witness : CallWitness) : Prop :=
-  assayDeclarationValid witness ∧
-    witness.backend = backendFor witness.target ∧
-    match witness.status with
-    | .called =>
-        implemented witness.target = true ∧
-          assayFailure witness.target witness.assay witness.validatedEnrichment = none ∧
-          0 < witness.callCount
-    | .noCall reason =>
-        witness.callCount = 0 ∧
-          match assayFailure witness.target witness.assay witness.validatedEnrichment with
-          | some expected => reason = expected
-          | none => evidenceNoCallAllowed witness.target reason = true
+def callStatusValid (witness : CallWitness) : Bool :=
+  match witness.status with
+  | .called =>
+      implemented witness.target &&
+        (noAssayFailure witness.target witness.assay witness.validatedEnrichment &&
+          decide (0 < witness.callCount))
+  | .noCall reason =>
+      decide (witness.callCount = 0) &&
+        (match assayFailure witness.target witness.assay witness.validatedEnrichment with
+        | some expected => decide (reason = expected)
+        | none => evidenceNoCallAllowed witness.target reason)
 
-instance callInvariantDecidable (witness : CallWitness) :
-    Decidable (callInvariant witness) := by
-  unfold callInvariant
-  cases hAssay : witness.assay <;>
-    cases hStatus : witness.status <;>
-      cases hFailure : assayFailure witness.target witness.assay
-        witness.validatedEnrichment <;>
-        simp [assayDeclarationValid, hAssay, hStatus, hFailure] <;>
-        infer_instance
+def callInvariant (witness : CallWitness) : Prop :=
+  assayDeclarationValid witness = true ∧
+    witness.backend = backendFor witness.target ∧
+    callStatusValid witness = true
 
 def verifyCall (witness : CallWitness) : Bool :=
-  decide (callInvariant witness)
+  assayDeclarationValid witness &&
+    (decide (witness.backend = backendFor witness.target) && callStatusValid witness)
 
 theorem verifyCall_sound (witness : CallWitness)
     (verified : verifyCall witness = true) :
     callInvariant witness := by
-  have decided : decide (callInvariant witness) = true := by
-    simpa [verifyCall] using verified
-  exact of_decide_eq_true decided
+  simp only [verifyCall, Bool.and_eq_true] at verified
+  exact ⟨verified.1, of_decide_eq_true verified.2.1, verified.2.2⟩
 
-theorem assayFailure_none_iff_observable
+theorem noAssayFailure_iff_observable
     (target : Target)
     (assay : Assay)
     (validatedEnrichment : Bool) :
-    assayFailure target assay validatedEnrichment = none ↔
+    noAssayFailure target assay validatedEnrichment = true ↔
       observable target assay validatedEnrichment = true := by
-  cases target <;> cases assay <;> cases validatedEnrichment <;> rfl
+  cases target <;> cases assay <;> cases validatedEnrichment <;>
+    simp [noAssayFailure, assayFailure, observable, wesSupport]
+
+theorem verified_assay_declaration_valid (witness : CallWitness)
+    (verified : verifyCall witness = true) :
+    assayDeclarationValid witness = true := by
+  exact (verifyCall_sound witness verified).1
 
 theorem verified_backend_matches_target (witness : CallWitness)
     (verified : verifyCall witness = true) :
@@ -101,27 +108,76 @@ theorem verified_called_is_implemented (witness : CallWitness)
     (status : witness.status = .called)
     (verified : verifyCall witness = true) :
     implemented witness.target = true := by
-  have invariant := verifyCall_sound witness verified
-  rw [status] at invariant
-  exact invariant.2.2.1
+  have statusValid := (verifyCall_sound witness verified).2.2
+  unfold callStatusValid at statusValid
+  rw [status] at statusValid
+  exact (Bool.and_eq_true.mp statusValid).1
 
 theorem verified_called_is_observable (witness : CallWitness)
     (status : witness.status = .called)
     (verified : verifyCall witness = true) :
     observable witness.target witness.assay witness.validatedEnrichment = true := by
-  have invariant := verifyCall_sound witness verified
-  rw [status] at invariant
-  exact (assayFailure_none_iff_observable
-    witness.target witness.assay witness.validatedEnrichment).mp invariant.2.2.2.1
+  have statusValid := (verifyCall_sound witness verified).2.2
+  unfold callStatusValid at statusValid
+  rw [status] at statusValid
+  have calledParts := Bool.and_eq_true.mp statusValid
+  have evidenceParts := Bool.and_eq_true.mp calledParts.2
+  exact (noAssayFailure_iff_observable
+    witness.target witness.assay witness.validatedEnrichment).mp evidenceParts.1
+
+theorem verified_called_has_positive_calls (witness : CallWitness)
+    (status : witness.status = .called)
+    (verified : verifyCall witness = true) :
+    0 < witness.callCount := by
+  have statusValid := (verifyCall_sound witness verified).2.2
+  unfold callStatusValid at statusValid
+  rw [status] at statusValid
+  have calledParts := Bool.and_eq_true.mp statusValid
+  have evidenceParts := Bool.and_eq_true.mp calledParts.2
+  exact of_decide_eq_true evidenceParts.2
 
 theorem verified_noCall_has_zero_calls (witness : CallWitness)
     (reason : NoCallReason)
     (status : witness.status = .noCall reason)
     (verified : verifyCall witness = true) :
     witness.callCount = 0 := by
-  have invariant := verifyCall_sound witness verified
-  rw [status] at invariant
-  exact invariant.2.2.1
+  have statusValid := (verifyCall_sound witness verified).2.2
+  unfold callStatusValid at statusValid
+  rw [status] at statusValid
+  exact of_decide_eq_true (Bool.and_eq_true.mp statusValid).1
+
+theorem verified_noCall_reason_valid (witness : CallWitness)
+    (reason : NoCallReason)
+    (status : witness.status = .noCall reason)
+    (verified : verifyCall witness = true) :
+    (match assayFailure witness.target witness.assay witness.validatedEnrichment with
+    | some expected => decide (reason = expected)
+    | none => evidenceNoCallAllowed witness.target reason) = true := by
+  have statusValid := (verifyCall_sound witness verified).2.2
+  unfold callStatusValid at statusValid
+  rw [status] at statusValid
+  exact (Bool.and_eq_true.mp statusValid).2
+
+theorem verified_noCall_exact_assay_reason (witness : CallWitness)
+    (reason expected : NoCallReason)
+    (status : witness.status = .noCall reason)
+    (failure : assayFailure witness.target witness.assay witness.validatedEnrichment =
+      some expected)
+    (verified : verifyCall witness = true) :
+    reason = expected := by
+  have reasonValid := verified_noCall_reason_valid witness reason status verified
+  rw [failure] at reasonValid
+  exact of_decide_eq_true reasonValid
+
+theorem verified_noCall_evidence_reason_allowed (witness : CallWitness)
+    (reason : NoCallReason)
+    (status : witness.status = .noCall reason)
+    (noFailure : assayFailure witness.target witness.assay witness.validatedEnrichment = none)
+    (verified : verifyCall witness = true) :
+    evidenceNoCallAllowed witness.target reason = true := by
+  have reasonValid := verified_noCall_reason_valid witness reason status verified
+  rw [noFailure] at reasonValid
+  exact reasonValid
 
 structure SelectionWitness where
   candidateCount : Nat
