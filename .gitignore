@@ -2,7 +2,6 @@
 /.lake/
 /dist/
 /local_runs/
-lake-manifest.json
 *.tmp
 *.log
 *.cert
