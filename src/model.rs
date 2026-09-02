@@ -250,14 +250,15 @@ impl fmt::Display for EvidenceKind {
     }
 }
 
+/// Biological or assay-level reasons for returning no call.
+///
+/// Software failures and malformed resources are errors, not no-calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoCallReason {
     AssayNotObservable,
     MissingValidatedEnrichment,
     InsufficientEvidence,
     AmbiguousTopScore,
-    BackendFailure,
-    ResourceMismatch,
 }
 
 impl fmt::Display for NoCallReason {
@@ -267,8 +268,6 @@ impl fmt::Display for NoCallReason {
             Self::MissingValidatedEnrichment => "missing-validated-enrichment",
             Self::InsufficientEvidence => "insufficient-evidence",
             Self::AmbiguousTopScore => "ambiguous-top-score",
-            Self::BackendFailure => "backend-failure",
-            Self::ResourceMismatch => "resource-mismatch",
         })
     }
 }
@@ -282,8 +281,6 @@ impl FromStr for NoCallReason {
             "missing-validated-enrichment" => Ok(Self::MissingValidatedEnrichment),
             "insufficient-evidence" => Ok(Self::InsufficientEvidence),
             "ambiguous-top-score" => Ok(Self::AmbiguousTopScore),
-            "backend-failure" => Ok(Self::BackendFailure),
-            "resource-mismatch" => Ok(Self::ResourceMismatch),
             _ => Err(format!("unknown no-call reason '{value}'")),
         }
     }
