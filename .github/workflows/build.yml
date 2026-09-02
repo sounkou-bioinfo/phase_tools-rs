@@ -63,6 +63,7 @@ jobs:
           test: false
           lint: false
           leanchecker: true
+          leanchecker-args: PhaseTools
           axiom-audit: true
           axiom-audit-root: PhaseTools
           use-github-cache: false
